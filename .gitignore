@@ -1,0 +1,6 @@
+# 本地开发生成的面板配置 (含密码哈希和会话密钥)
+server/data/
+# 原始脚本副本, 仅用于对比
+engine/vless.orig.sh
+*.tgz
+# server/node_modules 故意提交: 只有纯 JS 的二维码库, 服务器上不需要再装 npm

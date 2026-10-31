@@ -1,0 +1,47 @@
+{
+  "ok": true,
+  "version": "1.0",
+  "system": { "os": "debian 12", "kernel": "6.1.0-28-amd64", "ipv4": "203.0.113.10", "ipv6": "2001:db8::10" },
+  "cores": { "xray": "26.2.6", "singbox": "1.13.3" },
+  "services": [
+    { "name": "vless-reality", "proc": "xray", "active": true },
+    { "name": "vless-singbox", "proc": "sing-box", "active": true },
+    { "name": "vless-snell", "proc": "snell-server", "active": false },
+    { "name": "vless-watchdog", "proc": "vless-watchdog", "active": true }
+  ],
+  "routing_rules": 3,
+  "protocols": [
+    {
+      "core": "xray", "proto": "vless", "name": "VLESS-REALITY",
+      "instances": [
+        { "port": 443, "sni": "www.microsoft.com", "domain": "", "users": [
+          { "name": "default", "used": 0, "quota": 0, "enabled": true, "expire_date": "", "routing": "" },
+          { "name": "alice", "used": 34359738368, "quota": 107374182400, "enabled": true, "expire_date": "2026-12-31", "routing": "" },
+          { "name": "bob", "used": 112742891520, "quota": 107374182400, "enabled": false, "expire_date": "2026-10-15", "routing": "warp" }
+        ] }
+      ]
+    },
+    {
+      "core": "xray", "proto": "vless-xhttp", "name": "VLESS-XHTTP",
+      "instances": [
+        { "port": 8443, "sni": "www.apple.com", "domain": "", "users": [
+          { "name": "default", "used": 0, "quota": 0, "enabled": true, "expire_date": "", "routing": "" }
+        ] }
+      ]
+    },
+    {
+      "core": "singbox", "proto": "hy2", "name": "Hysteria2",
+      "instances": [
+        { "port": 20443, "sni": "www.bing.com", "domain": "", "users": [
+          { "name": "default", "used": 0, "quota": 0, "enabled": true, "expire_date": "", "routing": "" },
+          { "name": "carol", "used": 5368709120, "quota": 0, "enabled": true, "expire_date": "", "routing": "" }
+        ] },
+        { "port": 20444, "sni": "www.bing.com", "domain": "", "users": [] }
+      ]
+    },
+    {
+      "core": "singbox", "proto": "snell", "name": "Snell",
+      "instances": [ { "port": 36000, "sni": "", "domain": "", "users": [] } ]
+    }
+  ]
+}

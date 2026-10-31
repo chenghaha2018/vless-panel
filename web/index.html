@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>代理管理面板</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 登录 -->
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <h1>代理管理面板</h1>
+      <p class="muted">多协议代理服务端</p>
+      <label>用户名<input name="username" autocomplete="username" required value="admin"></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="login-error" class="error" hidden></p>
+      <button class="btn primary" type="submit">登录</button>
+    </form>
+  </section>
+
+  <!-- 主界面 -->
+  <div id="app" class="layout" hidden>
+    <aside class="sidebar">
+      <div class="brand">代理面板 <span id="mock-badge" class="badge warn" hidden>MOCK</span></div>
+      <nav id="nav">
+        <a href="#/dashboard" data-page="dashboard">仪表盘</a>
+        <a href="#/protocols" data-page="protocols">协议</a>
+        <a href="#/install" data-page="install">安装协议</a>
+        <a href="#/users" data-page="users">用户</a>
+        <a href="#/links" data-page="links">分享链接</a>
+        <a href="#/sub" data-page="sub">订阅服务</a>
+        <a href="#/notify" data-page="notify">通知与流量</a>
+        <a href="#/routing" data-page="routing">分流 / 链式代理</a>
+        <a href="#/system" data-page="system">系统</a>
+        <a href="#/logs" data-page="logs">运行日志</a>
+      </nav>
+      <button id="logout" class="btn ghost">退出登录</button>
+    </aside>
+    <main>
+      <header class="topbar">
+        <h2 id="page-title"></h2>
+        <div class="topbar-actions">
+          <a id="task-chip" class="badge warn chip" href="#/task" hidden>任务进行中</a>
+          <button id="refresh" class="btn">刷新</button>
+        </div>
+      </header>
+      <div id="view"></div>
+    </main>
+  </div>
+
+  <!-- 弹窗 -->
+  <dialog id="modal">
+    <div class="modal-head">
+      <h3 id="modal-title"></h3>
+      <button class="btn ghost" id="modal-close" aria-label="关闭">✕</button>
+    </div>
+    <div id="modal-body"></div>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

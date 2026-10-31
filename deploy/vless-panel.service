@@ -1,0 +1,18 @@
+[Unit]
+Description=vless-panel (多协议代理网页管理面板)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vless-panel/server
+ExecStart=/usr/bin/node /opt/vless-panel/server/server.js
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=3
+# 面板需要以 root 调用引擎 (改配置、启停服务); 不改 UMask, 脚本生成的伪装站和订阅文件要让 nginx 能读
+NoNewPrivileges=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

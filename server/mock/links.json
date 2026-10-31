@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "links": [
+    "vless://11111111-2222-4333-8444-555555555555@203.0.113.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=EXAMPLEPUBLICKEYxxxxxxxxxxxxxxxxxxxxxxxxxx&sid=abcd1234&type=tcp#US-VLESS-REALITY",
+    "vless://11111111-2222-4333-8444-555555555555@203.0.113.10:8443?encryption=none&security=reality&sni=www.apple.com&fp=chrome&pbk=EXAMPLEPUBLICKEYxxxxxxxxxxxxxxxxxxxxxxxxxx&sid=abcd1234&type=xhttp&path=%2Fxh#US-VLESS-XHTTP",
+    "hysteria2://example-password@203.0.113.10:20443?sni=www.bing.com&insecure=1#US-Hysteria2",
+    "snell://203.0.113.10:36000?psk=examplepsk&version=4#US-Snell"
+  ],
+  "user_links": [
+    { "proto": "vless", "user": "alice", "link": "vless://aaaaaaaa-2222-4333-8444-555555555555@203.0.113.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=EXAMPLEPUBLICKEYxxxxxxxxxxxxxxxxxxxxxxxxxx&sid=abcd1234&type=tcp#US-alice" },
+    { "proto": "vless", "user": "bob", "link": "vless://bbbbbbbb-2222-4333-8444-555555555555@203.0.113.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=EXAMPLEPUBLICKEYxxxxxxxxxxxxxxxxxxxxxxxxxx&sid=abcd1234&type=tcp#US-bob" },
+    { "proto": "hy2", "user": "carol", "link": "hysteria2://cccccccc-2222-4333-8444-555555555555@203.0.113.10:20443?sni=www.bing.com&insecure=1#US-carol" }
+  ]
+}
