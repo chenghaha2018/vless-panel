@@ -30,7 +30,7 @@ STATE="$DATA/install.env"
 NGINX_CONF=/etc/nginx/conf.d/vless-panel.conf
 WEBROOT=/var/www/html
 
-DOMAIN="" HTTPS_PORT="" EMAIL="" ACTION=install PURGE=false
+DOMAIN="" HTTPS_PORT="" EMAIL="" ACTION=install PURGE=false ASK_DOMAIN=yes
 
 R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' C=$'\e[36m' B=$'\e[1m' N=$'\e[0m'
 info() { echo -e "${C}▸${N} $*"; }
@@ -42,8 +42,9 @@ die()  { echo -e "${R}✗ $*${N}" >&2; exit 1; }
 usage() {
     cat <<'EOF'
 用法: install.sh [选项]
-  (无参数)          安装或升级面板, 只监听本机, 通过 SSH 隧道访问
-  --domain <域名>   用 nginx + Let's Encrypt 证书提供 HTTPS 访问 (域名需已解析到本机)
+  (无参数)          安装或升级面板; 首次安装会询问是否绑定域名 (回车跳过)
+  --domain <域名>   直接绑定域名: nginx + Let's Encrypt 证书提供 HTTPS 访问 (域名需已解析到本机)
+  --no-domain       不询问域名 (面板只监听本机, 通过 SSH 隧道访问), 适合自动化部署
   --port <端口>     HTTPS 访问端口, 默认随机 20000-30000 (443 留给代理协议)
   --email <邮箱>    申请证书用的邮箱 (可选)
   --uninstall       卸载面板, 不影响已安装的代理协议; 加 --purge 同时删除配置和证书
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --domain)    DOMAIN="${2:-}"; shift 2 ;;
         --port)      HTTPS_PORT="${2:-}"; shift 2 ;;
         --email)     EMAIL="${2:-}"; shift 2 ;;
+        --no-domain) ASK_DOMAIN=no; shift ;;
         --uninstall) ACTION=uninstall; shift ;;
         --purge)     PURGE=true; shift ;;
         -h|--help)   usage ;;
@@ -190,12 +192,78 @@ ok "面板服务已启动 (开机自启, 崩溃自动重启)"
 [[ -z "$DOMAIN" ]] && DOMAIN="${PANEL_DOMAIN:-}"
 [[ -z "$HTTPS_PORT" ]] && HTTPS_PORT="${PANEL_HTTPS_PORT:-}"
 
+PUBLIC_IP=$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)
+
+# 域名的 A 记录 (每行一个)。先查 Cloudflare 公共 DNS, 避免本机解析缓存刚改完的旧记录
+resolve_v4() {
+    local ips
+    ips=$(curl -fsS --max-time 8 -H 'accept: application/dns-json' \
+        "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null \
+        | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null)
+    [[ -z "$ips" ]] && ips=$(getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u)
+    echo "$ips"
+}
+
+# 域名是否解析到本机 (任意一条 A 记录等于本机公网 IP 即可; 查不到本机 IP 时不拦)
+dns_points_here() {
+    [[ -z "$PUBLIC_IP" ]] && return 0
+    resolve_v4 "$1" | grep -qx "$PUBLIC_IP"
+}
+
+valid_domain() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; }
+
+# 交互式询问绑定域名; 解析不对时可以改完 DNS 再试, 或回车跳过 (面板照常可用)
+ask_domain() {
+    local input ips
+    {
+        echo
+        echo "${B}绑定域名 (可选)${N}"
+        echo "  绑定后直接用 https://域名:端口 打开面板, 不用 SSH 隧道; 证书自动申请、自动续期。"
+        echo "  请先把域名的 A 记录指向本机 ${G}${PUBLIC_IP:-本机公网IP}${N} (Cloudflare 要关闭小云朵代理),"
+        echo "  并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。"
+    } > /dev/tty
+    while true; do
+        input=""
+        read -rp "  输入域名 (回车跳过): " input < /dev/tty || return 0
+        input=$(printf '%s' "$input" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+        input="${input#http://}"; input="${input#https://}"; input="${input%%/*}"; input="${input%%:*}"
+        if [[ -z "$input" ]]; then
+            info "跳过绑定域名。以后想绑定: 重新运行安装命令, 或加 --domain 你的域名"
+            return 0
+        fi
+        if ! valid_domain "$input"; then
+            warn "域名格式不对, 例如 panel.example.com"
+            continue
+        fi
+        if ! dns_points_here "$input"; then
+            ips=$(resolve_v4 "$input" | paste -sd, -)
+            warn "$input 现在解析到 ${ips:-（没有 A 记录）}, 不是本机 $PUBLIC_IP"
+            warn "改好 DNS 后通常几分钟内生效, 可以稍后重新输入; 或回车跳过"
+            continue
+        fi
+        ok "$input 已解析到本机"
+        DOMAIN="$input"
+        if [[ -z "$HTTPS_PORT" ]]; then
+            read -rp "  面板 HTTPS 端口 (回车随机 20000-30000): " input < /dev/tty || input=""
+            input=$(printf '%s' "$input" | tr -d '[:space:]')
+            if [[ "$input" =~ ^[0-9]+$ && "$input" -ge 1 && "$input" -le 65535 ]]; then
+                HTTPS_PORT="$input"
+            elif [[ -n "$input" ]]; then
+                warn "端口无效, 改用随机端口"
+            fi
+        fi
+        return 0
+    done
+}
+
+# 还没绑定域名、没有 --domain / --no-domain、并且有终端可交互时才询问
+if [[ -z "$DOMAIN" && "$ASK_DOMAIN" == yes ]] && { : < /dev/tty; } 2>/dev/null && [[ -t 1 || -w /dev/tty ]]; then
+    ask_domain
+fi
+
 setup_https() {
-    local ip resolved
-    ip=$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)
-    resolved=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')
-    if [[ -n "$ip" && "$resolved" != "$ip" ]]; then
-        die "域名 $DOMAIN 解析到 ${resolved:-无}, 不是本机 $ip。请先把域名 A 记录指向本机 (如用 Cloudflare 请关闭小云朵)"
+    if ! dns_points_here "$DOMAIN"; then
+        die "域名 $DOMAIN 解析到 $(resolve_v4 "$DOMAIN" | paste -sd, - | sed 's/^$/无/'), 不是本机 $PUBLIC_IP。请先把域名 A 记录指向本机 (如用 Cloudflare 请关闭小云朵)"
     fi
 
     if ! command -v nginx >/dev/null; then
@@ -237,6 +305,7 @@ EOF
     # rc=2 表示证书还没到续期时间, 沿用现有证书
     if [[ $rc -ne 0 && $rc -ne 2 ]]; then
         tail -n 15 "$tmp/acme.log" >&2
+        rm -f "$NGINX_CONF"; systemctl reload nginx 2>/dev/null || true
         die "证书申请失败 (常见原因: 域名未解析到本机、云厂商防火墙没放行 80 端口)"
     fi
     install -d -m 700 "$DATA/certs"
@@ -303,7 +372,7 @@ EOF
 
 #─── 结果 ───────────────────────────────────────────────────────────────────────
 
-ipv4=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "服务器IP")
+ipv4="${PUBLIC_IP:-服务器IP}"
 echo
 echo "${B}════════════════════════════════════════════════════${N}"
 echo "${B}  vless-panel $([[ $upgrade == true ]] && echo 升级 || echo 安装)完成${N}"

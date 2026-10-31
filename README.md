@@ -48,16 +48,23 @@ bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/ma
 
 - 自动安装 Node.js、jq，把面板装到 `/opt/vless-panel`，注册为 systemd 服务（开机自启、崩溃自动重启）
 - 首次安装随机生成端口（20000-30000）、访问路径和密码，结束时显示在屏幕上，也保存在 `/root/vless-panel-login.txt`（仅 root 可读）
-- 面板默认只监听本机，用 SSH 隧道访问：`ssh -L 端口:127.0.0.1:端口 root@服务器`，然后打开 `http://127.0.0.1:端口/随机路径/`
+- **安装过程中会询问是否绑定域名**：输入域名后会检查它是否已解析到本机（解析不对可以改完 DNS 再输入，或回车跳过），然后可以指定面板 HTTPS 端口（回车随机）
+- 不绑定域名时，面板只监听本机，用 SSH 隧道访问：`ssh -L 端口:127.0.0.1:端口 root@服务器`，然后打开 `http://127.0.0.1:端口/随机路径/`
 - 新服务器不需要先装原来的 `vless` 脚本，协议、证书、订阅都可以在面板里安装
 
-用域名 HTTPS 访问（域名需先解析到本机，Cloudflare 要关掉小云朵；云服务器要放行 80 和 HTTPS 端口）：
+绑定域名前：把域名 A 记录指向本机（Cloudflare 要关掉小云朵），并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。
+绑定后会自动安装 nginx 和 acme.sh、申请 Let's Encrypt 证书（自动续期），面板走一个单独的 HTTPS 端口，443 留给代理协议。
+
+也可以用参数直接指定、不再询问（适合批量 / 自动化部署）：
 
 ```bash
+# 直接绑定域名, 可加 --port 指定 HTTPS 端口
 bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh) --domain panel.example.com
+# 不绑定、也不询问
+bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh) --no-domain
 ```
 
-会自动安装 nginx 和 acme.sh、申请 Let's Encrypt 证书（自动续期），面板走一个随机的 HTTPS 端口（可用 `--port` 指定），443 留给代理协议。
+已安装的服务器想补绑或更换域名：重新运行安装命令（会再次询问），或加 `--domain 新域名`。
 
 升级：重新运行同一条命令（配置、密码、域名都保留）。卸载：加 `--uninstall`（保留配置，重装沿用原密码）；加 `--uninstall --purge` 连配置和证书一起删除。卸载面板不影响已安装的代理协议。
 
