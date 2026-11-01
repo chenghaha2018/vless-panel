@@ -153,8 +153,10 @@ const state = { status: null, links: null };
 
 async function load(force) {
   const q = force ? '?fresh=1' : '';
-  if (force || !state.status) state.status = await api('status' + q);
-  if (force || !state.links) state.links = await api('links' + q);
+  await Promise.all([
+    (force || !state.status) && api('status' + q).then((d) => { state.status = d; }),
+    (force || !state.links) && api('links' + q).then((d) => { state.links = d; }),
+  ]);
 }
 
 function allUsers() {
@@ -191,11 +193,11 @@ function renderDashboard(view) {
 
   view.innerHTML = `
     <div class="tiles">
-      ${tile(s.protocols.length, '已装协议')}
-      ${tile(instances, '端口实例')}
-      ${tile(users.length, '用户')}
-      ${tile(`${running}/${s.services.length}`, '运行中服务')}
-      ${tile(s.routing_rules, '分流规则')}
+      ${tile(s.protocols.length, '已装协议', 'layers', 1)}
+      ${tile(instances, '端口实例', 'plug', 2)}
+      ${tile(users.length, '用户', 'users', 3)}
+      ${tile(`${running}/${s.services.length}`, '运行中服务', 'pulse', 4)}
+      ${tile(s.routing_rules, '分流规则', 'route', 5)}
     </div>
     <div class="grid">
       <div class="card">
@@ -233,6 +235,7 @@ function renderDashboard(view) {
         </div>` : '<p class="muted">暂无服务</p>'}
       </div>
     </div>`;
+  countUp(view);
 
   view.onclick = async (e) => {
     const b = e.target.closest('[data-svc]');
@@ -245,7 +248,33 @@ function renderDashboard(view) {
   };
 }
 
-const tile = (num, label) => `<div class="card tile"><div class="num">${esc(num)}</div><div class="label">${esc(label)}</div></div>`;
+const ICONS = {
+  layers: '<path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0V8Z"/><path d="M12 17v5"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
+  pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  route: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H12a3 3 0 0 1 3 3v.5M8.5 18H12a3 3 0 0 0 3-3v-.5"/>',
+};
+const icon = (name) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+const tile = (num, label, ic, tone) => `<div class="card tile tone-${tone}"><span class="ti">${icon(ic)}</span>
+  <div><div class="num" data-count="${esc(num)}">${esc(num)}</div><div class="label">${esc(label)}</div></div></div>`;
+
+// 数字从 0 滚动到目标值 ("2/2" 这种按斜杠前后分别滚动)
+function countUp(root) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  root.querySelectorAll('[data-count]').forEach((el) => {
+    const parts = el.dataset.count.split('/').map(Number);
+    if (parts.some((n) => !Number.isFinite(n))) return;
+    const t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / 700);
+      const e = 1 - (1 - k) ** 3;
+      el.textContent = parts.map((n) => Math.round(n * e)).join('/');
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
 
 function verBadge(v) {
   if (v === '未安装') return '<span class="badge">未安装</span>';
@@ -432,7 +461,7 @@ function linkList(items) {
 }
 
 async function renderSub(view, force) {
-  view.innerHTML = '<div class="card muted">加载中…</div>';
+  view.innerHTML = skeleton();
   const s = await api('sub' + (force ? '?fresh=1' : ''));
   if (!s.enabled) {
     view.innerHTML = `<div class="card empty">
@@ -487,7 +516,7 @@ async function renderSub(view, force) {
 }
 
 async function renderNotify(view) {
-  view.innerHTML = '<div class="card muted">加载中…</div>';
+  view.innerHTML = skeleton();
   const { tg, traffic, monthly_reset: mr } = await api('settings');
   const pad = (n) => String(n).padStart(2, '0');
   view.innerHTML = `
@@ -664,7 +693,7 @@ document.addEventListener('click', (e) => {
 });
 
 async function renderRouting(view, force) {
-  view.innerHTML = '<div class="card muted">加载中…</div>';
+  view.innerHTML = skeleton();
   const r = await api('routing' + (force ? '?fresh=1' : ''));
   const [wl, wc] = WARP_ST[r.warp.status] || [r.warp.status, ''];
   view.innerHTML = `
@@ -768,7 +797,7 @@ const CORES = {
 };
 
 async function renderSystem(view, force) {
-  view.innerHTML = '<div class="card muted">加载中…</div>';
+  view.innerHTML = skeleton();
   const s = await api('system' + (force ? '?fresh=1' : ''));
   const installed = (v) => v && v !== '未安装' && v !== '未知';
   view.innerHTML = `
@@ -900,7 +929,7 @@ async function renderTask(view) {
     }
     $('.task-progress').hidden = $('#task-details').hidden = false;
     if (ui.id !== t.id) {
-      Object.assign(ui, { id: t.id, since: 0, steps: 0, now: '' });
+      Object.assign(ui, { id: t.id, since: 0, steps: 0, now: '', promptSeq: null });
       $('#task-log').textContent = '';
       return poll();
     }
@@ -921,7 +950,7 @@ async function renderTask(view) {
     drawProgress(t);
     if ((t.prompt && t.prompt.seq) !== ui.promptSeq) {
       ui.promptSeq = t.prompt ? t.prompt.seq : null;
-      drawPrompt(t.prompt);
+      drawPrompt(t.prompt, t.canBack);
     }
     setTaskChip(!t.ended);
     if (!t.ended) renderTask.timer = setTimeout(poll, t.status === 'waiting' ? 1500 : 600);
@@ -956,6 +985,7 @@ async function renderTask(view) {
     $('#task-pbar').className = 'pbar' + (t.status === 'done' ? ' ok' : failed ? ' bad' : t.ended ? '' : ' live');
     const now = t.status === 'done' ? '完成'
       : t.status === 'cancelled' ? '已取消'
+      : t.replaying ? '正在返回上一步…'
       : t.status === 'waiting' ? '等待你的选择…'
       : ui.now || '准备中…';
     $('#task-now').textContent = now;
@@ -963,17 +993,18 @@ async function renderTask(view) {
     if (t.status === 'failed' && !ui.opened) { ui.opened = true; $('#task-details').open = true; }
   };
 
-  const drawPrompt = (p) => {
+  const drawPrompt = (p, canBack) => {
     const box = $('#task-prompt');
     if (!p) { box.innerHTML = ''; return; }
     const text = p.text.replace(/\s*\[[^\]]*\]\s*[:：]?\s*$/, '').replace(/[:：]\s*$/, '') || '脚本在等待输入';
     const opts = p.options.filter((o) => o.text);
+    const back = canBack ? '<button type="button" class="btn ghost prompt-back" data-back>← 返回上一步</button>' : '';
     if (p.cont) {
-      box.innerHTML = `<form class="card prompt" novalidate>
+      box.innerHTML = `<form class="card prompt" novalidate>${back}
         <div class="prompt-q">${esc(p.text.replace(/[.。…]+$/, ''))}</div>
         <div class="prompt-opts"><button type="button" class="btn primary" data-ans="">继续</button></div>
         <p class="hint muted">这一步的输出在下方"详细日志"里, 看完后点继续。</p></form>`;
-    } else box.innerHTML = `<form class="card prompt" novalidate>
+    } else box.innerHTML = `<form class="card prompt" novalidate>${back}
       <div class="prompt-q">${esc(text)}</div>
       ${p.confirm ? `<div class="prompt-opts">
           <button type="button" class="btn ${p.confirm === 'y' ? 'primary' : ''}" data-ans="y">是</button>
@@ -999,9 +1030,24 @@ async function renderTask(view) {
         form.querySelectorAll('button, input').forEach((el) => { el.disabled = false; });
       }
     };
-    form.onclick = (e) => { const b = e.target.closest('[data-ans]'); if (b) answer(b.dataset.ans); };
+    const goBack = async () => {
+      form.querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
+      try {
+        await post('task/back');
+        clearTimeout(renderTask.timer);
+        poll();
+      } catch (e) {
+        toast(e.message, true);
+        form.querySelectorAll('button, input').forEach((el) => { el.disabled = false; });
+      }
+    };
+    form.onclick = (e) => {
+      if (e.target.closest('[data-back]')) return goBack();
+      const b = e.target.closest('[data-ans]');
+      if (b) answer(b.dataset.ans);
+    };
     form.onsubmit = (e) => { e.preventDefault(); answer(form.elements.v ? form.elements.v.value : ''); };
-    const first = $('input', form) && !opts.length ? $('input', form) : $('.btn.primary, .btn', form);
+    const first = $('input', form) && !opts.length ? $('input', form) : $('.btn.primary', form) || $('[data-ans]', form);
     first && first.focus();
   };
 
@@ -1061,14 +1107,27 @@ async function route(force) {
   if (name !== 'task') api('task').then((d) => setTaskChip(!!(d.task && !d.task.ended))).catch(() => {});
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === name));
   $('#page-title').textContent = page.title;
-  const view = $('#view');
-  view.onclick = null;
+  // 每次切页用一个新容器: 慢的旧页面加载完时只会写进已经移走的容器, 不会盖掉新页面
+  // 刷新 (force) 时旧内容留着直到新数据到达, 避免闪一下空白
+  const seq = (route.seq = (route.seq || 0) + 1);
+  const view = document.createElement('div');
+  view.className = 'page';
+  const host = $('#view');
+  const mount = () => { if (seq === route.seq && !view.isConnected) host.replaceChildren(view); };
+  if (!force) { mount(); view.innerHTML = skeleton(); }
   try {
     await load(force);
+    mount();
     await page.render(view, force);
   } catch (e) {
+    mount();
     if (e.message !== '未登录') view.innerHTML = `<div class="card error">加载失败: ${esc(e.message)}</div>`;
   }
+}
+
+// 加载占位: 几块闪光的灰色卡片
+function skeleton() {
+  return `<div class="skeleton">${'<div class="sk-card"></div>'.repeat(3)}</div>`;
 }
 
 function showLogin() {

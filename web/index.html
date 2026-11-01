@@ -10,7 +10,9 @@
 <body>
   <!-- 登录 -->
   <section id="login" class="login" hidden>
+    <div class="blobs" aria-hidden="true"><i></i><i></i><i></i></div>
     <form id="login-form" class="login-card">
+      <span class="logo lg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></span>
       <h1>代理管理面板</h1>
       <p class="muted">多协议代理服务端</p>
       <label>用户名<input name="username" autocomplete="username" required value="admin"></label>
@@ -23,27 +25,27 @@
   <!-- 主界面 -->
   <div id="app" class="layout" hidden>
     <aside class="sidebar">
-      <div class="brand">代理面板 <span id="mock-badge" class="badge warn" hidden>MOCK</span></div>
+      <div class="brand"><span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></span><span>代理面板</span> <span id="mock-badge" class="badge warn" hidden>MOCK</span></div>
       <nav id="nav">
-        <a href="#/dashboard" data-page="dashboard">仪表盘</a>
-        <a href="#/protocols" data-page="protocols">协议</a>
-        <a href="#/install" data-page="install">安装协议</a>
-        <a href="#/users" data-page="users">用户</a>
-        <a href="#/links" data-page="links">分享链接</a>
-        <a href="#/sub" data-page="sub">订阅服务</a>
-        <a href="#/notify" data-page="notify">通知与流量</a>
-        <a href="#/routing" data-page="routing">分流 / 链式代理</a>
-        <a href="#/system" data-page="system">系统</a>
-        <a href="#/logs" data-page="logs">运行日志</a>
+        <a href="#/dashboard" data-page="dashboard"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>仪表盘</span></a>
+        <a href="#/protocols" data-page="protocols"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg><span>协议</span></a>
+        <a href="#/install" data-page="install"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span>安装协议</span></a>
+        <a href="#/users" data-page="users"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg><span>用户</span></a>
+        <a href="#/links" data-page="links"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg><span>分享链接</span></a>
+        <a href="#/sub" data-page="sub"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.5"/></svg><span>订阅服务</span></a>
+        <a href="#/notify" data-page="notify"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg><span>通知与流量</span></a>
+        <a href="#/routing" data-page="routing"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H12a3 3 0 0 1 3 3v.5M8.5 18H12a3 3 0 0 0 3-3v-.5"/></svg><span>分流 / 链式代理</span></a>
+        <a href="#/system" data-page="system"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>系统</span></a>
+        <a href="#/logs" data-page="logs"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span>运行日志</span></a>
       </nav>
-      <button id="logout" class="btn ghost">退出登录</button>
+      <button id="logout" class="btn ghost logout"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg><span>退出登录</span></button>
     </aside>
     <main>
       <header class="topbar">
         <h2 id="page-title"></h2>
         <div class="topbar-actions">
           <a id="task-chip" class="badge warn chip" href="#/task" hidden>任务进行中</a>
-          <button id="refresh" class="btn">刷新</button>
+          <button id="refresh" class="btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>刷新</span></button>
         </div>
       </header>
       <div id="view"></div>

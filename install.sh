@@ -425,6 +425,19 @@ install_deps() {
     ok "Node.js $(node -v), $(jq --version)"
 }
 
+# 预装代理依赖和 Xray / Sing-box 核心, 之后在面板里装协议不用再等下载
+# (已装好的会直接跳过; 失败不影响面板, 装协议时还会再装一次)
+prepare_cores() {
+    info "预装代理依赖和核心 (Xray, Sing-box)..."
+    local out
+    if out=$(bash "$DIR/engine/vless.sh" --api prepare 2> >(sed -u 's/\x1b\[[0-9;]*m//g; s/^/    /' >&2)) \
+        && [[ "$(jq -r .ok <<< "$out" 2>/dev/null)" == true ]]; then
+        ok "核心已就绪: Xray $(jq -r .xray <<< "$out"), Sing-box $(jq -r .singbox <<< "$out")"
+    else
+        warn "核心预装失败 (多半是网络问题), 面板照常可用; 装协议时会再自动安装, 也可以在「系统」页安装"
+    fi
+}
+
 do_install() {
     local upgrade=false first=false src panel_port base_path
     installed && upgrade=true
@@ -491,6 +504,8 @@ do_install() {
     else
         warn "$SHORTCUT 已被其他程序占用, 未创建短命令; 可用 bash $DIR/install.sh 打开菜单"
     fi
+
+    prepare_cores
 
     [[ -n "$DOMAIN" ]] && setup_https
 

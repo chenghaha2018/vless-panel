@@ -5688,6 +5688,13 @@ test_latency() {
 # 安装系统依赖
 install_deps() {
     _info "检查系统依赖..."
+    # 依赖都在就不再 apt-get update (每次装协议都更新索引要 10~60 秒)
+    local c have=true
+    for c in curl jq unzip ip xxd openssl socat xz iptables; do command -v "$c" &>/dev/null || { have=false; break; }; done
+    if [[ "$have" == "true" ]] && { command -v dig &>/dev/null || command -v nslookup &>/dev/null; }; then
+        _ok "系统依赖已齐全"
+        return 0
+    fi
     if [[ "$DISTRO" == "alpine" ]]; then
         _info "更新软件包索引..."
         if ! timeout 60 apk update 2>&1 | grep -E '^(fetch|OK)' | sed 's/^/  /'; then
@@ -25548,6 +25555,17 @@ api_versions_refresh() {
     _api_ok "版本信息已刷新"
 }
 
+# 预装: 依赖 + Xray + Sing-box (面板安装脚本调用), 之后装协议不用再等下载
+api_prepare() {
+    {
+        check_dependencies || return 1
+        install_deps || return 1
+        install_xray || return 1
+        install_singbox || return 1
+    } >&2 || { _api_err "预装失败, 可以稍后在面板「系统」页安装核心"; return 1; }
+    jq -c -n --arg x "$(_get_core_version xray)" --arg s "$(_get_core_version sing-box)"         '{ok:true, xray:$x, singbox:$s}'
+}
+
 api_dispatch() {
     local action="$1"; shift
     check_cmd jq || { echo '{"ok":false,"error":"缺少 jq"}'; return 1; }
@@ -25581,6 +25599,7 @@ api_dispatch() {
         routing-del)   api_routing_del "$@" ;;
         latency)       api_latency "$@" ;;
         system-info)   api_system_info ;;
+        prepare)       api_prepare ;;
         versions-refresh) api_versions_refresh ;;
         *)             _api_err "未知动作: $action"; return 1 ;;
     esac

@@ -167,7 +167,7 @@ function runWrite(action, args) {
   if (taskActive()) return Promise.resolve({ ok: false, error: '有交互任务正在执行, 请等它结束' });
   const p = writeChain.then(() => runEngine(action, args));
   writeChain = p.catch(() => {});
-  return p.finally(() => cache.clear());
+  return p.finally(invalidateCache);
 }
 
 // ─── 写接口参数校验 (引擎里还会再校验一次) ──────────────────────
@@ -298,6 +298,12 @@ function handleOutput(line) {
       task.prompt = buildPrompt(stripAnsi(ev.text || ''), !!ev.secret, task.pending);
       task.pending = [];
       task.status = 'waiting';
+      // "返回上一步"后重放之前的回答; 问题对不上 (流程变了) 就停下来让用户自己选
+      if (task.replay.length) {
+        const r = task.replay.shift();
+        if (r.key === promptKey(task.prompt)) giveAnswer(r.value);
+        else task.replay = [];
+      }
     } else if (ev.type === 'result') {
       task.results.push(ev);
     }
@@ -306,7 +312,7 @@ function handleOutput(line) {
   pushLine(stripAnsi(line));
 }
 
-function startTask(kind, args, user) {
+function startTask(kind, args, user, replay = []) {
   need(!taskActive(), '已有任务在运行');
   let argv;
   if (MOCK) {
@@ -323,6 +329,7 @@ function startTask(kind, args, user) {
   task = {
     id: ++taskSeq, kind, args, user, status: 'running', started: Date.now(), ended: null, exitCode: null,
     lines: [], offset: 0, pending: [], prompt: null, promptSeq: 0, results: [], child, cancelled: false,
+    answers: [], replay: [...replay],
   };
   const t = task;
   for (const stream of [child.stdout, child.stderr]) {
@@ -343,7 +350,9 @@ function startTask(kind, args, user) {
     t.exitCode = code;
     t.prompt = null;
     t.status = t.cancelled ? 'cancelled' : code === 0 ? 'done' : 'failed';
-    cache.clear();
+    if (t.onClose) t.onClose();
+    if (t.superseded) return; // 被"返回上一步"替换掉的进程, 不算任务结束
+    invalidateCache();
     if (MOCK && t.status === 'done') t.results.forEach((r) => mockEngine.applyResult(r));
     console.log(`[${new Date().toISOString()}] ${user} 任务 #${t.id} ${kind} ${args.join(' ')} → ${t.status} (${code})`);
   });
@@ -356,11 +365,37 @@ function answerTask(b) {
   need(b.seq === task.prompt.seq, '问题已过期, 请刷新');
   const v = str(b.value);
   need(v.length <= 1024 && !/[\r\n\0]/.test(v), '输入内容无效');
-  pushLine(`› ${task.prompt.text} ${task.prompt.secret ? '******' : v}`);
+  giveAnswer(v);
+}
+
+// 问题的身份: 去掉数字 (随机端口之类的默认值每次不同) + 选项编号
+const promptKey = (p) => p.text.replace(/\d+/g, '#') + '|' + p.options.map((o) => o.key).join(',');
+
+function giveAnswer(v) {
+  const p = task.prompt;
+  // 回车用默认值时记下实际的默认值, 重放时随机默认值 (端口等) 才会和第一次一样
+  const value = v === '' && p.default && !p.options.length ? p.default : v;
+  task.answers.push({ key: promptKey(p), value });
+  pushLine(`› ${p.text} ${p.secret ? '******' : v}`);
   task.pending = [];
   task.prompt = null;
   task.status = 'running';
   task.child.stdin.write(v + '\n');
+}
+
+// 返回上一步: 脚本没法倒退, 所以结束当前进程, 重新运行同一个流程,
+// 自动重放除最后一个以外的全部回答, 停在上一个问题等用户重新选
+function backTask() {
+  need(taskActive() && task.prompt && task.answers.length, '当前没有可以返回的步骤');
+  const old = task;
+  old.superseded = true;
+  const closed = new Promise((resolve) => { old.onClose = resolve; });
+  try {
+    if (process.platform !== 'win32') process.kill(-old.child.pid, 'SIGTERM');
+    else old.child.kill();
+  } catch { old.child.kill(); }
+  const force = setTimeout(() => { try { process.kill(-old.child.pid, 'SIGKILL'); } catch { old.child.kill('SIGKILL'); } }, 3000);
+  return closed.finally(() => clearTimeout(force)).then(() => startTask(old.kind, old.args, old.user, old.answers.slice(0, -1)));
 }
 
 function cancelTask() {
@@ -379,21 +414,43 @@ function taskView(since) {
     ok: true,
     task: {
       id: task.id, kind: task.kind, args: task.args, status: task.status, started: task.started, ended: task.ended,
-      exitCode: task.exitCode, prompt: task.prompt, from, total: task.offset + task.lines.length,
+      exitCode: task.exitCode, prompt: task.replay.length ? null : task.prompt, from, total: task.offset + task.lines.length,
+      canBack: task.answers.length > 0, replaying: task.replay.length > 0,
       lines: task.lines.slice(from - task.offset),
     },
   };
 }
 
-// status 会探测公网 IP, 做 10 秒缓存
+// 读接口缓存: 每次调用引擎要启动整个脚本 (0.5~1 秒), 所以
+//  - 10 秒内直接用缓存
+//  - 过期但不超过 5 分钟: 先返回旧数据, 后台刷新 (下次打开就是新的)
+//  - 同一个键同时只跑一个引擎进程, 其他请求等它的结果
+//  - 写操作后整体作废 (gen 防止作废前发出的请求把旧数据写回来), 并在后台预热
 const cache = new Map();
-async function cached(key, ttl, fn) {
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.t < ttl) return hit.v;
-  const v = await fn();
-  cache.set(key, { t: Date.now(), v });
-  return v;
+const MAX_STALE = 5 * 60 * 1000;
+let cacheGen = 0;
+function cached(key, ttl, fn) {
+  let e = cache.get(key);
+  if (!e) cache.set(key, (e = { t: 0, v: null, p: null }));
+  const age = Date.now() - e.t;
+  if (e.v && age < ttl) return Promise.resolve(e.v);
+  if (!e.p) {
+    const g = cacheGen;
+    e.p = fn().then((v) => { if (g === cacheGen) { e.v = v; e.t = Date.now(); } return v; })
+      .finally(() => { e.p = null; });
+    e.p.catch(() => {}); // 后台刷新失败时不要变成未处理的 rejection
+  }
+  if (e.v && ttl > 0 && age < MAX_STALE) return Promise.resolve(e.v);
+  return e.p;
 }
+const READS = {
+  status: () => runEngine('status'), links: () => runEngine('links'),
+  routing: () => runEngine('routing-info'), system: () => runEngine('system-info'), sub: () => runEngine('sub-info'),
+};
+const readCached = (key, ttl) => cached(key, ttl, READS[key]);
+// 预热最常用的两个 (仪表盘和协议页都要用)
+function warmCache() { for (const k of ['status', 'links']) readCached(k, 10000).catch(() => {}); }
+function invalidateCache() { cacheGen++; cache.clear(); warmCache(); }
 
 // ─── HTTP ────────────────────────────────────────────────────
 
@@ -428,12 +485,16 @@ function readBody(req) {
   });
 }
 
-function serveStatic(res, rel) {
+function serveStatic(req, res, rel) {
   const file = path.normalize(path.join(WEB_DIR, rel || 'index.html'));
   if (!file.startsWith(WEB_DIR)) return send(res, 403, 'Forbidden');
   fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, 'Not Found');
+    // 内容没变就回 304, 浏览器直接用本地缓存
+    const etag = '"' + crypto.createHash('sha1').update(data).digest('base64url').slice(0, 16) + '"';
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' }); return res.end(); }
     res.writeHead(200, {
+      ETag: etag,
       'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
       'Cache-Control': 'no-cache',
       'X-Content-Type-Options': 'nosniff',
@@ -493,6 +554,11 @@ async function handleApi(req, res, route, url) {
       }
       if (route === 'task/answer') { answerTask(b); return send(res, 200, { ok: true }); }
       if (route === 'task/cancel') { cancelTask(); return send(res, 200, { ok: true, message: '已取消任务' }); }
+      if (route === 'task/back') {
+        const t = await backTask();
+        console.log(`[${new Date().toISOString()}] ${session.u}@${ip} 任务返回上一步 → #${t.id}`);
+        return send(res, 200, { ok: true, id: t.id });
+      }
     } catch (e) {
       if (e instanceof BadRequest) return send(res, 400, { ok: false, error: e.message });
       throw e;
@@ -517,9 +583,11 @@ async function handleApi(req, res, route, url) {
     case 'me':
       return send(res, 200, { ok: true, user: session.u, mock: MOCK });
     case 'status':
-      return send(res, 200, await cached('status', ttl, () => runEngine('status')));
     case 'links':
-      return send(res, 200, await cached('links', ttl, () => runEngine('links')));
+    case 'routing':
+    case 'system':
+    case 'sub':
+      return send(res, 200, await readCached(route, ttl));
     case 'logs': {
       const target = url.searchParams.get('target') || 'script';
       const lines = url.searchParams.get('lines') || '100';
@@ -532,10 +600,6 @@ async function handleApi(req, res, route, url) {
       return send(res, 200, taskView(Number(url.searchParams.get('since')) || 0));
     case 'settings':
       return send(res, 200, await runEngine('settings'));
-    case 'routing':
-      return send(res, 200, await cached('routing', ttl, () => runEngine('routing-info')));
-    case 'system':
-      return send(res, 200, await cached('system', ttl, () => runEngine('system-info')));
     case 'latency': {
       // 每次测速会临时启动一个核心进程, 同时最多 3 个
       const target = url.searchParams.get('target') || '';
@@ -544,8 +608,6 @@ async function handleApi(req, res, route, url) {
       latencyRunning++;
       try { return send(res, 200, await runEngine('latency', [target])); } finally { latencyRunning--; }
     }
-    case 'sub':
-      return send(res, 200, await cached('sub', ttl, () => runEngine('sub-info')));
     case 'qr': {
       const text = url.searchParams.get('text') || '';
       if (!text || text.length > 2048) return send(res, 400, 'bad text');
@@ -567,7 +629,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p.startsWith('api/')) return await handleApi(req, res, p.slice(4), url);
-    return serveStatic(res, p);
+    return serveStatic(req, res, p);
   } catch (e) {
     return send(res, 500, { ok: false, error: e.message });
   }
@@ -575,4 +637,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(conf.port, conf.listen, () => {
   console.log(`vless-panel ${MOCK ? '[mock] ' : ''}监听 http://${conf.listen}:${conf.port}${BASE}`);
+  warmCache();
 });
