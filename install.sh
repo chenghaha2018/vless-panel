@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 #═══════════════════════════════════════════════════════════════════════════════
-#  vless-panel 一键安装 / 升级 / 卸载 (Debian / Ubuntu, 需 root)
+#  vless-panel 一键安装 / 管理脚本 (Debian / Ubuntu, 需 root)
 #
-#  安装或升级:
-#    bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh)
-#  同时配置 HTTPS 域名访问 (域名需已解析到本机):
-#    bash <(curl -fsSL .../install.sh) --domain panel.example.com
-#  卸载面板 (不影响已安装的代理协议):
-#    bash <(curl -fsSL .../install.sh) --uninstall
+#  bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh)
 #
-#  选项:
-#    --domain <域名>   用 nginx + Let's Encrypt 证书提供 HTTPS 访问
-#    --port <端口>     HTTPS 访问端口, 默认随机 20000-30000 (443 留给代理协议)
-#    --email <邮箱>    申请证书用的邮箱 (可选)
-#    --uninstall       卸载面板; 加 --purge 同时删除面板配置和证书
+#  运行后显示菜单: 安装/升级、卸载、绑定域名、查看访问地址、重置密码、重启。
+#  安装完成后, 在服务器上输入 vp 即可随时打开这个菜单。
+#
+#  不经菜单 (自动化部署):
+#    --domain <域名> [--port <端口>]   安装并绑定域名
+#    --no-domain                      安装, 不绑定域名
+#    --uninstall [--purge]            卸载 (--purge 同时删除配置和证书)
 #═══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -29,10 +26,11 @@ LOGIN=/root/vless-panel-login.txt
 STATE="$DATA/install.env"
 NGINX_CONF=/etc/nginx/conf.d/vless-panel.conf
 WEBROOT=/var/www/html
+SHORTCUT=/usr/local/bin/vp
 
-DOMAIN="" HTTPS_PORT="" EMAIL="" ACTION=install PURGE=false ASK_DOMAIN=yes
+DOMAIN="" HTTPS_PORT="" PANEL_PORT_WANT="" EMAIL="" ACTION="" PURGE=false ASK_DOMAIN=yes
 
-R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' C=$'\e[36m' B=$'\e[1m' N=$'\e[0m'
+R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' C=$'\e[36m' B=$'\e[1m' D=$'\e[2m' N=$'\e[0m'
 info() { echo -e "${C}▸${N} $*"; }
 ok()   { echo -e "${G}✓${N} $*"; }
 warn() { echo -e "${Y}!${N} $*"; }
@@ -41,11 +39,10 @@ die()  { echo -e "${R}✗ $*${N}" >&2; exit 1; }
 # 用 bash <(curl ...) 运行时 $0 是一次性管道, 不能再读一遍, 所以帮助文字单独写
 usage() {
     cat <<'EOF'
-用法: install.sh [选项]
-  (无参数)          安装或升级面板; 首次安装会询问是否绑定域名 (回车跳过)
-  --domain <域名>   直接绑定域名: nginx + Let's Encrypt 证书提供 HTTPS 访问 (域名需已解析到本机)
-  --no-domain       不询问域名 (面板只监听本机, 通过 SSH 隧道访问), 适合自动化部署
-  --port <端口>     HTTPS 访问端口, 默认随机 20000-30000 (443 留给代理协议)
+用法: install.sh [选项]          (不带选项: 显示菜单; 安装后可用 vp 打开)
+  --domain <域名>   安装并绑定域名: nginx + Let's Encrypt 证书提供 HTTPS 访问
+  --port <端口>     绑定域名时的 HTTPS 端口, 默认随机 20000-30000 (443 留给代理协议)
+  --no-domain       安装, 不绑定域名 (面板只监听本机, 通过 SSH 隧道访问)
   --email <邮箱>    申请证书用的邮箱 (可选)
   --uninstall       卸载面板, 不影响已安装的代理协议; 加 --purge 同时删除配置和证书
 EOF
@@ -54,10 +51,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --domain)    DOMAIN="${2:-}"; shift 2 ;;
+        --domain)    DOMAIN="${2:-}"; ACTION=install; shift 2 ;;
         --port)      HTTPS_PORT="${2:-}"; shift 2 ;;
         --email)     EMAIL="${2:-}"; shift 2 ;;
-        --no-domain) ASK_DOMAIN=no; shift ;;
+        --no-domain) ASK_DOMAIN=no; ACTION=install; shift ;;
+        --install)   ACTION=install; shift ;;
         --uninstall) ACTION=uninstall; shift ;;
         --purge)     PURGE=true; shift ;;
         -h|--help)   usage ;;
@@ -70,8 +68,29 @@ done
 [[ $EUID -eq 0 ]] || die "请用 root 运行"
 command -v systemctl >/dev/null && [[ -d /run/systemd/system ]] || die "需要 systemd (暂不支持 Alpine / OpenRC)"
 command -v apt-get >/dev/null || die "目前只支持 Debian / Ubuntu"
-[[ -z "$DOMAIN" || "$DOMAIN" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]] || die "域名格式不正确: $DOMAIN"
+DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')
+[[ -z "$DOMAIN" || "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "域名格式不正确: $DOMAIN"
 [[ -z "$HTTPS_PORT" || ( "$HTTPS_PORT" =~ ^[0-9]+$ && "$HTTPS_PORT" -ge 1 && "$HTTPS_PORT" -le 65535 ) ]] || die "端口不正确: $HTTPS_PORT"
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+#─── 通用工具 ───────────────────────────────────────────────────────────────────
+
+# 是否有终端可以交互 (bash <(curl ...) 和 vp 都有; 放在自动化脚本里运行时没有)
+has_tty() { { : < /dev/tty; } 2>/dev/null; }
+
+# 从终端读一行: ask "提示" 变量名
+ask() { local __v=""; read -rp "$1" __v < /dev/tty || true; printf -v "$2" '%s' "$__v"; }
+
+# 是否回答"是": confirm "提示" y|n(默认)
+confirm() {
+    local a hint="[Y/n]"; [[ "${2:-y}" == n ]] && hint="[y/N]"
+    ask "$1 $hint: " a
+    a="${a:-${2:-y}}"
+    [[ "$a" =~ ^[yY] ]]
+}
+
+installed() { [[ -f "$UNIT" && -d "$DIR" ]]; }
 
 # 端口是否已被监听, 或已写在 nginx 配置里
 port_used() {
@@ -88,9 +107,96 @@ pick_port() {
     die "找不到空闲端口"
 }
 
+valid_port() { [[ "$1" =~ ^[0-9]+$ && "$1" -ge 1 && "$1" -le 65535 ]]; }
+valid_domain() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; }
+
+PUBLIC_IP=""
+public_ip() {
+    [[ -z "$PUBLIC_IP" ]] && PUBLIC_IP=$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)
+    echo "$PUBLIC_IP"
+}
+
+# 域名的 A 记录 (每行一个)。先查 Cloudflare 公共 DNS, 避免本机解析缓存刚改完的旧记录;
+# 不依赖 jq, 安装依赖之前也能用
+resolve_v4() {
+    local ips
+    ips=$(curl -fsS --max-time 8 -H 'accept: application/dns-json' \
+        "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null \
+        | grep -oE '"type":1,[^}]*"data":"[0-9.]+"' | grep -oE '[0-9]+(\.[0-9]+){3}' || true)
+    [[ -z "$ips" ]] && ips=$(getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u || true)
+    echo "$ips"
+}
+
+# 域名是否解析到本机 (任意一条 A 记录等于本机公网 IP 即可; 查不到本机 IP 时不拦)
+dns_points_here() {
+    local ip; ip=$(public_ip)
+    [[ -z "$ip" ]] && return 0
+    resolve_v4 "$1" | grep -qx "$ip"
+}
+
+load_state() {
+    PANEL_DOMAIN="" PANEL_HTTPS_PORT=""
+    [[ -f "$STATE" ]] && . "$STATE"
+    return 0
+}
+
+#─── 交互: 域名 / 端口 ──────────────────────────────────────────────────────────
+
+# 询问域名; 解析不对时可以改完 DNS 再输, 或回车跳过。结果写入 DOMAIN
+ask_domain() {
+    local input ips
+    echo
+    echo "${B}① 绑定域名 (可选)${N}"
+    echo "  绑定后直接用 https://域名:端口 打开面板, 不用 SSH 隧道; 证书自动申请、自动续期。"
+    echo "  请先把域名的 A 记录指向本机 ${G}$(public_ip | sed 's/^$/本机公网IP/')${N} (Cloudflare 要关闭小云朵代理),"
+    echo "  并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。"
+    while true; do
+        ask "  输入域名 (回车跳过, 不绑定): " input
+        input=$(printf '%s' "$input" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+        input="${input#http://}"; input="${input#https://}"; input="${input%%/*}"; input="${input%%:*}"
+        if [[ -z "$input" ]]; then
+            DOMAIN=""
+            echo "  ${D}不绑定域名, 面板只监听本机, 通过 SSH 隧道访问${N}"
+            return 0
+        fi
+        if ! valid_domain "$input"; then
+            warn "域名格式不对, 例如 panel.example.com"
+            continue
+        fi
+        if ! dns_points_here "$input"; then
+            ips=$(resolve_v4 "$input" | paste -sd, -)
+            warn "$input 现在解析到 ${ips:-（没有 A 记录）}, 不是本机 $(public_ip)"
+            warn "改好 DNS 后通常几分钟内生效, 可以稍后重新输入; 或回车跳过"
+            continue
+        fi
+        ok "$input 已解析到本机"
+        DOMAIN="$input"
+        return 0
+    done
+}
+
+# 询问端口: ask_port "说明" 变量名 [默认值]  (默认值为空时随机挑一个空闲端口)
+ask_port() {
+    local label="$1" var="$2" def="${3:-}" input
+    [[ -z "$def" ]] && def=$(pick_port)
+    while true; do
+        ask "  $label [回车使用 $def]: " input
+        input=$(printf '%s' "$input" | tr -d '[:space:]')
+        input="${input:-$def}"
+        if ! valid_port "$input"; then
+            warn "端口应为 1-65535 的数字"
+        elif [[ "$input" != "$def" ]] && port_used "$input"; then
+            warn "端口 $input 已被占用, 换一个"
+        else
+            printf -v "$var" '%s' "$input"
+            return 0
+        fi
+    done
+}
+
 #─── 卸载 ───────────────────────────────────────────────────────────────────────
 
-if [[ "$ACTION" == uninstall ]]; then
+do_uninstall() {
     info "停止并删除面板服务..."
     systemctl disable --now vless-panel 2>/dev/null || true
     rm -f "$UNIT"; systemctl daemon-reload
@@ -101,169 +207,29 @@ if [[ "$ACTION" == uninstall ]]; then
         warn "已移除面板创建的定时任务 (流量同步 / 到期检查)"
     fi
     rm -rf "$DIR"
+    [[ -f "$SHORTCUT" ]] && grep -q "$DIR/install.sh" "$SHORTCUT" 2>/dev/null && rm -f "$SHORTCUT"
     if [[ -f "$NGINX_CONF" ]]; then
         rm -f "$NGINX_CONF"
         nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
         ok "已删除面板的 nginx 配置"
     fi
     if [[ "$PURGE" == true ]]; then
-        [[ -f "$STATE" ]] && . "$STATE" || true
-        [[ -n "${PANEL_DOMAIN:-}" && -x /root/.acme.sh/acme.sh ]] && /root/.acme.sh/acme.sh --remove -d "$PANEL_DOMAIN" --ecc >/dev/null 2>&1 || true
+        load_state
+        [[ -n "$PANEL_DOMAIN" && -x /root/.acme.sh/acme.sh ]] && /root/.acme.sh/acme.sh --remove -d "$PANEL_DOMAIN" --ecc >/dev/null 2>&1 || true
         rm -rf "$DATA" "$LOGIN"
         ok "已删除面板配置、证书和登录信息"
     else
         info "面板配置保留在 $DATA (重新安装时沿用原密码); 彻底删除请加 --purge"
     fi
     ok "面板已卸载。已安装的代理协议不受影响, 仍由 xray / sing-box 服务运行。"
-    exit 0
-fi
-
-#─── 安装依赖 ───────────────────────────────────────────────────────────────────
-
-info "安装依赖 (nodejs jq curl)..."
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq nodejs jq curl tar ca-certificates iproute2 cron >/dev/null
-node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-[[ "$node_major" -ge 12 ]] || die "Node.js 版本过低 ($(node -v 2>/dev/null)), 需要 12 以上"
-ok "Node.js $(node -v), $(jq --version)"
-
-#─── 下载并安装面板 ─────────────────────────────────────────────────────────────
-
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-if [[ -n "$LOCAL_SRC" ]]; then
-    info "使用本地源码: $LOCAL_SRC"
-    src="$LOCAL_SRC"
-else
-    [[ "$REPO" == *"__"REPO"__"* ]] && die "安装脚本还没有设置仓库地址 (REPO)"
-    info "下载 $REPO ($BRANCH)..."
-    curl -fsSL "https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH" | tar xz -C "$tmp" \
-        || die "下载失败, 请检查网络或仓库地址"
-    src=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)
-fi
-[[ -f "$src/server/server.js" && -f "$src/engine/vless.sh" && -d "$src/server/node_modules" ]] || die "安装包不完整"
-
-upgrade=false
-[[ -d "$DIR" ]] && upgrade=true
-rm -rf "$DIR.new"
-cp -a "$src" "$DIR.new"
-rm -rf "$DIR.new/server/data" "$DIR.new/.git"
-chmod +x "$DIR.new"/engine/*.sh "$DIR.new/install.sh" 2>/dev/null || true
-[[ -d "$DIR" ]] && { rm -rf "$DIR.old"; mv "$DIR" "$DIR.old"; }
-mv "$DIR.new" "$DIR"
-ok "面板文件已$([[ $upgrade == true ]] && echo 更新 || echo 安装)到 $DIR"
-
-# 首次安装: 生成配置和密码 (面板端口随机 20000-30000, 只监听本机)
-first=false
-if [[ ! -f "$DATA/panel.json" ]]; then
-    first=true
-    panel_port=$(pick_port)
-    (umask 077; PANEL_DATA="$DATA" PANEL_PORT="$panel_port" node "$DIR/server/server.js" --reset-password > "$LOGIN")
-    ok "已生成管理员账号 (保存在 $LOGIN, 仅 root 可读)"
-fi
-panel_port=$(jq -r .port "$DATA/panel.json")
-base_path=$(jq -r .basePath "$DATA/panel.json")
-
-#─── systemd 服务 ───────────────────────────────────────────────────────────────
-
-install -m 644 "$DIR/deploy/vless-panel.service" "$UNIT"
-systemctl daemon-reload
-systemctl enable vless-panel >/dev/null 2>&1
-systemctl restart vless-panel
-for _ in $(seq 1 20); do
-    ss -tln | grep -q "127.0.0.1:$panel_port " && break
-    sleep 0.5
-done
-if ! ss -tln | grep -q "127.0.0.1:$panel_port "; then
-    journalctl -u vless-panel -n 20 --no-pager >&2 || true
-    if [[ -d "$DIR.old" ]]; then
-        warn "新版本启动失败, 回滚到旧版本"
-        rm -rf "$DIR"; mv "$DIR.old" "$DIR"; systemctl restart vless-panel
-    fi
-    die "面板启动失败"
-fi
-rm -rf "$DIR.old"
-ok "面板服务已启动 (开机自启, 崩溃自动重启)"
-
-#─── HTTPS (可选) ───────────────────────────────────────────────────────────────
-
-# 升级时沿用上次的域名配置
-[[ -f "$STATE" ]] && . "$STATE"
-[[ -z "$DOMAIN" ]] && DOMAIN="${PANEL_DOMAIN:-}"
-[[ -z "$HTTPS_PORT" ]] && HTTPS_PORT="${PANEL_HTTPS_PORT:-}"
-
-PUBLIC_IP=$(curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)
-
-# 域名的 A 记录 (每行一个)。先查 Cloudflare 公共 DNS, 避免本机解析缓存刚改完的旧记录
-resolve_v4() {
-    local ips
-    ips=$(curl -fsS --max-time 8 -H 'accept: application/dns-json' \
-        "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null \
-        | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null)
-    [[ -z "$ips" ]] && ips=$(getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u)
-    echo "$ips"
 }
 
-# 域名是否解析到本机 (任意一条 A 记录等于本机公网 IP 即可; 查不到本机 IP 时不拦)
-dns_points_here() {
-    [[ -z "$PUBLIC_IP" ]] && return 0
-    resolve_v4 "$1" | grep -qx "$PUBLIC_IP"
-}
-
-valid_domain() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; }
-
-# 交互式询问绑定域名; 解析不对时可以改完 DNS 再试, 或回车跳过 (面板照常可用)
-ask_domain() {
-    local input ips
-    {
-        echo
-        echo "${B}绑定域名 (可选)${N}"
-        echo "  绑定后直接用 https://域名:端口 打开面板, 不用 SSH 隧道; 证书自动申请、自动续期。"
-        echo "  请先把域名的 A 记录指向本机 ${G}${PUBLIC_IP:-本机公网IP}${N} (Cloudflare 要关闭小云朵代理),"
-        echo "  并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。"
-    } > /dev/tty
-    while true; do
-        input=""
-        read -rp "  输入域名 (回车跳过): " input < /dev/tty || return 0
-        input=$(printf '%s' "$input" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
-        input="${input#http://}"; input="${input#https://}"; input="${input%%/*}"; input="${input%%:*}"
-        if [[ -z "$input" ]]; then
-            info "跳过绑定域名。以后想绑定: 重新运行安装命令, 或加 --domain 你的域名"
-            return 0
-        fi
-        if ! valid_domain "$input"; then
-            warn "域名格式不对, 例如 panel.example.com"
-            continue
-        fi
-        if ! dns_points_here "$input"; then
-            ips=$(resolve_v4 "$input" | paste -sd, -)
-            warn "$input 现在解析到 ${ips:-（没有 A 记录）}, 不是本机 $PUBLIC_IP"
-            warn "改好 DNS 后通常几分钟内生效, 可以稍后重新输入; 或回车跳过"
-            continue
-        fi
-        ok "$input 已解析到本机"
-        DOMAIN="$input"
-        if [[ -z "$HTTPS_PORT" ]]; then
-            read -rp "  面板 HTTPS 端口 (回车随机 20000-30000): " input < /dev/tty || input=""
-            input=$(printf '%s' "$input" | tr -d '[:space:]')
-            if [[ "$input" =~ ^[0-9]+$ && "$input" -ge 1 && "$input" -le 65535 ]]; then
-                HTTPS_PORT="$input"
-            elif [[ -n "$input" ]]; then
-                warn "端口无效, 改用随机端口"
-            fi
-        fi
-        return 0
-    done
-}
-
-# 还没绑定域名、没有 --domain / --no-domain、并且有终端可交互时才询问
-if [[ -z "$DOMAIN" && "$ASK_DOMAIN" == yes ]] && { : < /dev/tty; } 2>/dev/null && [[ -t 1 || -w /dev/tty ]]; then
-    ask_domain
-fi
+#─── HTTPS ──────────────────────────────────────────────────────────────────────
 
 setup_https() {
+    local panel_port; panel_port=$(jq -r .port "$DATA/panel.json")
     if ! dns_points_here "$DOMAIN"; then
-        die "域名 $DOMAIN 解析到 $(resolve_v4 "$DOMAIN" | paste -sd, - | sed 's/^$/无/'), 不是本机 $PUBLIC_IP。请先把域名 A 记录指向本机 (如用 Cloudflare 请关闭小云朵)"
+        die "域名 $DOMAIN 解析到 $(resolve_v4 "$DOMAIN" | paste -sd, - | sed 's/^$/无/'), 不是本机 $(public_ip)。请先把域名 A 记录指向本机 (如用 Cloudflare 请关闭小云朵)"
     fi
 
     if ! command -v nginx >/dev/null; then
@@ -275,7 +241,8 @@ setup_https() {
         die "80 端口被非 nginx 程序占用, 无法申请证书"
     fi
     [[ -z "$HTTPS_PORT" ]] && HTTPS_PORT=$(pick_port)
-    if [[ ! -f "$NGINX_CONF" ]] && port_used "$HTTPS_PORT"; then
+    # 换端口时旧配置还占着原端口, 检查前先排除自己的配置
+    if port_used "$HTTPS_PORT" && ! grep -qE "listen[[:space:]]+$HTTPS_PORT[[:space:]]" "$NGINX_CONF" 2>/dev/null; then
         die "端口 $HTTPS_PORT 已被占用, 换一个: --port <端口>"
     fi
 
@@ -368,32 +335,240 @@ EOF
     ok "HTTPS 已配置"
 }
 
-[[ -n "$DOMAIN" ]] && setup_https
+#─── 安装 / 升级 ────────────────────────────────────────────────────────────────
 
-#─── 结果 ───────────────────────────────────────────────────────────────────────
+install_deps() {
+    info "安装依赖 (nodejs jq curl)..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq nodejs jq curl tar ca-certificates iproute2 cron >/dev/null
+    local node_major
+    node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+    [[ "$node_major" -ge 12 ]] || die "Node.js 版本过低 ($(node -v 2>/dev/null)), 需要 12 以上"
+    ok "Node.js $(node -v), $(jq --version)"
+}
 
-ipv4="${PUBLIC_IP:-服务器IP}"
-echo
-echo "${B}════════════════════════════════════════════════════${N}"
-echo "${B}  vless-panel $([[ $upgrade == true ]] && echo 升级 || echo 安装)完成${N}"
-echo "${B}════════════════════════════════════════════════════${N}"
-if [[ -n "$DOMAIN" ]]; then
-    echo "  访问地址: ${G}https://$DOMAIN:$HTTPS_PORT$base_path${N}"
-    echo "  ${Y}云服务器请在安全组 / 防火墙放行 TCP 80 和 $HTTPS_PORT${N}"
-else
-    echo "  面板只监听本机, 在你自己电脑上开 SSH 隧道后访问:"
-    echo "    ssh -L $panel_port:127.0.0.1:$panel_port root@$ipv4"
-    echo "    浏览器打开 ${G}http://127.0.0.1:$panel_port$base_path${N}"
-    echo "  想用域名 HTTPS 访问: 重新运行本脚本并加 --domain 你的域名"
-fi
-echo "  用户名:   admin"
-if [[ "$first" == true ]]; then
-    echo "  密码:     ${G}$(sed -n 's/^ *密码: *//p' "$LOGIN" | head -1)${N}"
-    echo "  (登录信息也保存在 $LOGIN)"
-else
-    echo "  密码:     未改变。忘记了可以重置:"
-    echo "    cd $DIR/server && node server.js --reset-password > $LOGIN && systemctl restart vless-panel"
-fi
-echo
-echo "  升级: 重新运行同一条安装命令    卸载: 加 --uninstall"
-echo "${B}════════════════════════════════════════════════════${N}"
+do_install() {
+    local upgrade=false first=false src panel_port base_path
+    installed && upgrade=true
+    load_state
+    # 升级时沿用上次的域名配置
+    [[ -z "$DOMAIN" ]] && DOMAIN="$PANEL_DOMAIN"
+    [[ -z "$HTTPS_PORT" ]] && HTTPS_PORT="$PANEL_HTTPS_PORT"
+
+    install_deps
+
+    if [[ -n "$LOCAL_SRC" ]]; then
+        info "使用本地源码: $LOCAL_SRC"
+        src="$LOCAL_SRC"
+    else
+        [[ "$REPO" == *"__"REPO"__"* ]] && die "安装脚本还没有设置仓库地址 (REPO)"
+        info "下载 $REPO ($BRANCH)..."
+        curl -fsSL "https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH" | tar xz -C "$tmp" \
+            || die "下载失败, 请检查网络或仓库地址"
+        src=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)
+    fi
+    [[ -f "$src/server/server.js" && -f "$src/engine/vless.sh" && -d "$src/server/node_modules" ]] || die "安装包不完整"
+
+    rm -rf "$DIR.new"
+    cp -a "$src" "$DIR.new"
+    rm -rf "$DIR.new/server/data" "$DIR.new/.git"
+    chmod +x "$DIR.new"/engine/*.sh "$DIR.new/install.sh" 2>/dev/null || true
+    [[ -d "$DIR" ]] && { rm -rf "$DIR.old"; mv "$DIR" "$DIR.old"; }
+    mv "$DIR.new" "$DIR"
+    ok "面板文件已$([[ $upgrade == true ]] && echo 更新 || echo 安装)到 $DIR"
+
+    # 首次安装: 生成配置和密码 (面板只监听本机)
+    if [[ ! -f "$DATA/panel.json" ]]; then
+        first=true
+        panel_port="${PANEL_PORT_WANT:-$(pick_port)}"
+        (umask 077; PANEL_DATA="$DATA" PANEL_PORT="$panel_port" node "$DIR/server/server.js" --reset-password > "$LOGIN")
+        ok "已生成管理员账号 (保存在 $LOGIN, 仅 root 可读)"
+    fi
+    panel_port=$(jq -r .port "$DATA/panel.json")
+
+    install -m 644 "$DIR/deploy/vless-panel.service" "$UNIT"
+    systemctl daemon-reload
+    systemctl enable vless-panel >/dev/null 2>&1
+    systemctl restart vless-panel
+    for _ in $(seq 1 20); do
+        ss -tln | grep -q "127.0.0.1:$panel_port " && break
+        sleep 0.5
+    done
+    if ! ss -tln | grep -q "127.0.0.1:$panel_port "; then
+        journalctl -u vless-panel -n 20 --no-pager >&2 || true
+        if [[ -d "$DIR.old" ]]; then
+            warn "新版本启动失败, 回滚到旧版本"
+            rm -rf "$DIR"; mv "$DIR.old" "$DIR"; systemctl restart vless-panel
+        fi
+        die "面板启动失败"
+    fi
+    rm -rf "$DIR.old"
+    ok "面板服务已启动 (开机自启, 崩溃自动重启)"
+
+    # 短命令 vp: 随时打开本菜单
+    if [[ ! -e "$SHORTCUT" ]] || grep -q "$DIR/install.sh" "$SHORTCUT" 2>/dev/null; then
+        printf '#!/bin/bash\n# vless-panel 管理菜单 (由 install.sh 创建)\nexec bash %s "$@"\n' "$DIR/install.sh" > "$SHORTCUT"
+        chmod 755 "$SHORTCUT"
+        ok "已创建短命令: ${B}vp${N} (随时打开管理菜单)"
+    else
+        warn "$SHORTCUT 已被其他程序占用, 未创建短命令; 可用 bash $DIR/install.sh 打开菜单"
+    fi
+
+    [[ -n "$DOMAIN" ]] && setup_https
+
+    show_info "$([[ $upgrade == true ]] && echo 升级 || echo 安装)完成" "$first"
+}
+
+# 安装前先问清楚: 域名 → 端口 → 确认, 然后才开始装
+interactive_install() {
+    if installed; then
+        load_state
+        echo
+        info "面板已安装$([[ -n "$PANEL_DOMAIN" ]] && echo ", 已绑定 $PANEL_DOMAIN")。将从 GitHub 升级到最新版, 配置和密码保持不变。"
+        confirm "  确认升级?" y || { echo "  已取消"; return 0; }
+        do_install
+        return 0
+    fi
+
+    ask_domain
+    echo
+    echo "${B}② 确认端口${N}"
+    if [[ -n "$DOMAIN" ]]; then
+        ask_port "面板 HTTPS 端口 (443 留给代理协议)" HTTPS_PORT "$HTTPS_PORT"
+    else
+        ask_port "面板端口 (只监听本机, SSH 隧道用)" PANEL_PORT_WANT
+    fi
+
+    echo
+    echo "${B}③ 确认安装${N}"
+    if [[ -n "$DOMAIN" ]]; then
+        echo "  访问方式: ${G}https://$DOMAIN:$HTTPS_PORT${N} (自动申请证书)"
+    else
+        echo "  访问方式: SSH 隧道, 面板端口 ${G}$PANEL_PORT_WANT${N}"
+    fi
+    echo "  安装位置: $DIR    短命令: vp"
+    confirm "  开始安装?" y || { echo "  已取消, 没有做任何改动"; return 0; }
+    do_install
+}
+
+interactive_uninstall() {
+    if ! installed; then
+        warn "面板没有安装, 无需卸载"
+        return 0
+    fi
+    echo
+    warn "将卸载面板 (服务、程序文件、vp 短命令、面板 nginx 配置)。已安装的代理协议不受影响。"
+    confirm "  确认卸载?" n || { echo "  已取消"; return 0; }
+    confirm "  同时删除面板配置、证书和登录信息? (选否则重装时沿用原密码)" n && PURGE=true
+    do_uninstall
+}
+
+interactive_bind_domain() {
+    installed || { warn "请先安装面板"; return 0; }
+    load_state
+    [[ -n "$PANEL_DOMAIN" ]] && info "当前已绑定: $PANEL_DOMAIN (HTTPS 端口 $PANEL_HTTPS_PORT)"
+    ask_domain
+    [[ -z "$DOMAIN" ]] && { echo "  未做改动"; return 0; }
+    echo
+    echo "${B}② 确认端口${N}"
+    ask_port "面板 HTTPS 端口" HTTPS_PORT "$PANEL_HTTPS_PORT"
+    confirm "  确认绑定 $DOMAIN:$HTTPS_PORT ?" y || { echo "  已取消"; return 0; }
+    command -v jq >/dev/null || install_deps
+    setup_https
+    show_info "域名绑定完成" false
+}
+
+reset_password() {
+    installed || { warn "请先安装面板"; return 0; }
+    confirm "  重置面板密码? (旧密码立即失效)" n || { echo "  已取消"; return 0; }
+    (umask 077; PANEL_DATA="$DATA" node "$DIR/server/server.js" --reset-password > "$LOGIN")
+    systemctl restart vless-panel
+    show_info "密码已重置" true
+}
+
+#─── 显示访问信息 ───────────────────────────────────────────────────────────────
+
+# show_info "标题" 是否显示密码(true/false)
+show_info() {
+    local title="$1" show_pw="${2:-false}" panel_port base_path
+    if [[ ! -f "$DATA/panel.json" ]]; then warn "面板没有安装"; return 0; fi
+    panel_port=$(jq -r .port "$DATA/panel.json" 2>/dev/null || sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$DATA/panel.json")
+    base_path=$(jq -r .basePath "$DATA/panel.json" 2>/dev/null || sed -n 's/.*"basePath": *"\([^"]*\)".*/\1/p' "$DATA/panel.json")
+    load_state
+    echo
+    echo "${B}════════════════════════════════════════════════════${N}"
+    echo "${B}  vless-panel $title${N}"
+    echo "${B}════════════════════════════════════════════════════${N}"
+    echo "  状态:     $(systemctl is-active vless-panel 2>/dev/null | sed "s/^active$/${G}运行中${N}/")"
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        echo "  访问地址: ${G}https://$PANEL_DOMAIN:$PANEL_HTTPS_PORT$base_path${N}"
+        echo "  ${Y}云服务器请在安全组 / 防火墙放行 TCP 80 和 $PANEL_HTTPS_PORT${N}"
+    else
+        echo "  面板只监听本机, 在你自己电脑上开 SSH 隧道后访问:"
+        echo "    ssh -L $panel_port:127.0.0.1:$panel_port root@$(public_ip | sed 's/^$/服务器IP/')"
+        echo "    浏览器打开 ${G}http://127.0.0.1:$panel_port$base_path${N}"
+    fi
+    echo "  用户名:   admin"
+    if [[ "$show_pw" == true && -f "$LOGIN" ]]; then
+        echo "  密码:     ${G}$(sed -n 's/^ *密码: *//p' "$LOGIN" | tail -1)${N}"
+        echo "  (登录信息也保存在 $LOGIN)"
+    else
+        echo "  密码:     见 $LOGIN (忘记了可在菜单里重置)"
+    fi
+    echo
+    echo "  管理菜单: 输入 ${B}vp${N}"
+    echo "${B}════════════════════════════════════════════════════${N}"
+}
+
+#─── 菜单 ───────────────────────────────────────────────────────────────────────
+
+menu() {
+    local choice status
+    while true; do
+        load_state
+        if installed; then
+            status="${G}已安装${N}, $(systemctl is-active vless-panel 2>/dev/null | sed "s/^active$/运行中/; s/^inactive$/${R}已停止${N}/")"
+            [[ -n "$PANEL_DOMAIN" ]] && status+=", 域名 $PANEL_DOMAIN"
+        else
+            status="${D}未安装${N}"
+        fi
+        echo
+        echo "${B}══════════ vless-panel 管理 ══════════${N}"
+        echo "  状态: $status"
+        echo "──────────────────────────────────────"
+        echo "  ${G}1${N}) $(installed && echo '升级面板' || echo '安装面板')"
+        echo "  ${G}2${N}) 卸载面板"
+        echo "  ${G}3${N}) 绑定 / 更换域名"
+        echo "  ${G}4${N}) 查看访问地址"
+        echo "  ${G}5${N}) 重置密码"
+        echo "  ${G}6${N}) 重启面板"
+        echo "  ${G}0${N}) 退出"
+        echo "──────────────────────────────────────"
+        ask "  请选择: " choice
+        case "$choice" in
+            1) interactive_install; return 0 ;;
+            2) interactive_uninstall; return 0 ;;
+            3) interactive_bind_domain ;;
+            4) show_info "访问信息" true ;;
+            5) reset_password ;;
+            6) if installed; then systemctl restart vless-panel && ok "面板已重启"; else warn "面板没有安装"; fi ;;
+            0|"") return 0 ;;
+            *) warn "无效选择" ;;
+        esac
+    done
+}
+
+#─── 入口 ───────────────────────────────────────────────────────────────────────
+
+case "$ACTION" in
+    install)   do_install ;;
+    uninstall) do_uninstall ;;
+    "")
+        if has_tty; then
+            menu
+        else
+            do_install   # 没有终端 (自动化): 直接安装/升级, 不绑定域名
+        fi
+        ;;
+esac

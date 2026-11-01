@@ -46,27 +46,35 @@ cd server && npm install && npm run dev
 bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh)
 ```
 
-- 自动安装 Node.js、jq，把面板装到 `/opt/vless-panel`，注册为 systemd 服务（开机自启、崩溃自动重启）
-- 首次安装随机生成端口（20000-30000）、访问路径和密码，结束时显示在屏幕上，也保存在 `/root/vless-panel-login.txt`（仅 root 可读）
-- **安装过程中会询问是否绑定域名**：输入域名后会检查它是否已解析到本机（解析不对可以改完 DNS 再输入，或回车跳过），然后可以指定面板 HTTPS 端口（回车随机）
-- 不绑定域名时，面板只监听本机，用 SSH 隧道访问：`ssh -L 端口:127.0.0.1:端口 root@服务器`，然后打开 `http://127.0.0.1:端口/随机路径/`
-- 新服务器不需要先装原来的 `vless` 脚本，协议、证书、订阅都可以在面板里安装
+运行后先显示菜单：
 
-绑定域名前：把域名 A 记录指向本机（Cloudflare 要关掉小云朵），并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。
-绑定后会自动安装 nginx 和 acme.sh、申请 Let's Encrypt 证书（自动续期），面板走一个单独的 HTTPS 端口，443 留给代理协议。
-
-也可以用参数直接指定、不再询问（适合批量 / 自动化部署）：
-
-```bash
-# 直接绑定域名, 可加 --port 指定 HTTPS 端口
-bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh) --domain panel.example.com
-# 不绑定、也不询问
-bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh) --no-domain
+```
+══════════ vless-panel 管理 ══════════
+  1) 安装面板 / 升级面板
+  2) 卸载面板
+  3) 绑定 / 更换域名
+  4) 查看访问地址
+  5) 重置密码
+  6) 重启面板
+  0) 退出
 ```
 
-已安装的服务器想补绑或更换域名：重新运行安装命令（会再次询问），或加 `--domain 新域名`。
+- **安装**先问后装：① 输入域名（会检查是否已解析到本机；解析不对可以改完 DNS 再输，或回车跳过）→ ② 确认端口（给出一个随机空闲端口，回车采用或自己填）→ ③ 确认后才开始安装
+- 自动安装 Node.js、jq，把面板装到 `/opt/vless-panel`，注册为 systemd 服务（开机自启、崩溃自动重启），生成随机访问路径和密码（结束时显示，也保存在 `/root/vless-panel-login.txt`，仅 root 可读）
+- **装好后在服务器上输入 `vp` 就能随时打开这个菜单**
+- 不绑定域名时，面板只监听本机，用 SSH 隧道访问：`ssh -L 端口:127.0.0.1:端口 root@服务器`，然后打开 `http://127.0.0.1:端口/随机路径/`
+- 绑定域名前：把域名 A 记录指向本机（Cloudflare 要关掉小云朵），并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。绑定后自动安装 nginx 和 acme.sh、申请 Let's Encrypt 证书（自动续期），面板走单独的 HTTPS 端口，443 留给代理协议
+- 升级保留配置、密码和域名；卸载不影响已安装的代理协议，可选择是否同时删除配置和证书
+- 新服务器不需要先装原来的 `vless` 脚本，协议、证书、订阅都可以在面板里安装
 
-升级：重新运行同一条命令（配置、密码、域名都保留）。卸载：加 `--uninstall`（保留配置，重装沿用原密码）；加 `--uninstall --purge` 连配置和证书一起删除。卸载面板不影响已安装的代理协议。
+不经菜单、直接执行（适合批量 / 自动化部署）：
+
+```bash
+URL=https://raw.githubusercontent.com/chenghaha2018/vless-panel/main/install.sh
+bash <(curl -fsSL $URL) --domain panel.example.com [--port 端口]   # 安装并绑定域名
+bash <(curl -fsSL $URL) --no-domain                                # 安装, 不绑定域名
+bash <(curl -fsSL $URL) --uninstall [--purge]                      # 卸载 (--purge 连配置和证书一起删)
+```
 
 暂不支持：Alpine（OpenRC）、CentOS。443 已经被 nginx stream 按 SNI 分流的服务器，参考 [deploy/nginx-vless-panel.conf](deploy/nginx-vless-panel.conf) 手动配置。
 
