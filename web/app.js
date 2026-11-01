@@ -578,10 +578,6 @@ const CATALOG = [
     C('VLESS + TLS + Vision', '真实证书直连, 可做 443 主协议带回落', ['TCP', 'TLS'], { install: 'vless-vision' }),
     C('VLESS Encryption', 'Xray 新版后量子加密 (ML-KEM-768) + Vision, 不需要域名和证书; 需新版客户端', ['TCP', 'ML-KEM'], { install: 'vless-enc' }),
   ]],
-  ['Xray · Trojan', 'Xray', [
-    C('Trojan + TLS', '需要证书, 可做 443 主协议带回落', ['TCP', 'TLS'], { install: 'trojan', pick: '传输模式选 TCP+TLS' }),
-    C('Trojan + WS + TLS', '可过 CDN', ['WS', 'TLS'], { install: 'trojan', proto: 'trojan-ws', pick: '传输模式选 WebSocket+TLS' }),
-  ]],
   ['Xray · Shadowsocks / SOCKS', 'Xray', [
     C('Shadowsocks 2022', '新版加密, 需要服务器时间准确', ['TCP/UDP', 'AEAD-2022'], { install: 'ss2022', star: true }),
     C('SS2022 + ShadowTLS v3', '用 TLS 握手伪装, 高阻断环境', ['TCP', 'ShadowTLS'], { install: 'ss2022', proto: 'ss2022-shadowtls', pick: '启用 ShadowTLS 选「是」' }),
@@ -883,9 +879,14 @@ function stopTimers() {
 async function renderTask(view) {
   view.innerHTML = `
     <div class="card task-head" id="task-head"><span class="muted">加载中…</span></div>
+    <div class="card task-progress">
+      <div class="pbar" id="task-pbar"><i id="task-bar"></i></div>
+      <div class="task-now" id="task-now">准备中…</div>
+    </div>
     <div id="task-prompt"></div>
-    <pre class="log task-log" id="task-log"></pre>`;
-  const ui = { since: 0, promptSeq: null, id: null };
+    <details class="task-details" id="task-details"><summary>详细日志</summary>
+      <pre class="log task-log" id="task-log"></pre></details>`;
+  const ui = { since: 0, promptSeq: null, id: null, steps: 0, now: '' };
 
   const poll = async () => {
     if (!$('#task-log')) return;
@@ -894,17 +895,30 @@ async function renderTask(view) {
     const t = d && d.task;
     if (!t) {
       $('#task-head').innerHTML = '<span class="muted">当前没有任务。</span> <a href="#/install">去安装协议</a>';
+      $('.task-progress').hidden = $('#task-details').hidden = true;
       return;
     }
-    if (ui.id !== t.id) { ui.id = t.id; ui.since = 0; $('#task-log').textContent = ''; return poll(); }
+    $('.task-progress').hidden = $('#task-details').hidden = false;
+    if (ui.id !== t.id) {
+      Object.assign(ui, { id: t.id, since: 0, steps: 0, now: '' });
+      $('#task-log').textContent = '';
+      return poll();
+    }
 
     const log = $('#task-log');
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     if (t.lines.length) appendLog(log, t.lines.join('\n') + '\n');
+    for (const raw of t.lines) {
+      const line = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+      if (!line || /^[\s─━═—\-=*#│|+]+$/.test(line)) continue;
+      ui.now = line;
+      if (/^[▸✓✔→•]/.test(line)) ui.steps++;
+    }
     ui.since = t.total;
     if (atBottom) log.scrollTop = log.scrollHeight;
 
     drawHead(t);
+    drawProgress(t);
     if ((t.prompt && t.prompt.seq) !== ui.promptSeq) {
       ui.promptSeq = t.prompt ? t.prompt.seq : null;
       drawPrompt(t.prompt);
@@ -933,6 +947,22 @@ async function renderTask(view) {
     };
   };
 
+  // 脚本没有总步数, 按已完成的步骤和耗时估算进度, 结束前最多到 95%
+  const drawProgress = (t) => {
+    const secs = ((t.ended || Date.now()) - t.started) / 1000;
+    const failed = t.status === 'failed' || t.status === 'cancelled';
+    const pct = t.status === 'done' ? 100 : Math.min(95, 100 * (1 - Math.exp(-(ui.steps + secs / 15) / 12)));
+    $('#task-bar').style.width = pct.toFixed(1) + '%';
+    $('#task-pbar').className = 'pbar' + (t.status === 'done' ? ' ok' : failed ? ' bad' : t.ended ? '' : ' live');
+    const now = t.status === 'done' ? '完成'
+      : t.status === 'cancelled' ? '已取消'
+      : t.status === 'waiting' ? '等待你的选择…'
+      : ui.now || '准备中…';
+    $('#task-now').textContent = now;
+    $('#task-now').className = 'task-now' + (failed ? ' error' : '');
+    if (t.status === 'failed' && !ui.opened) { ui.opened = true; $('#task-details').open = true; }
+  };
+
   const drawPrompt = (p) => {
     const box = $('#task-prompt');
     if (!p) { box.innerHTML = ''; return; }
@@ -942,7 +972,7 @@ async function renderTask(view) {
       box.innerHTML = `<form class="card prompt" novalidate>
         <div class="prompt-q">${esc(p.text.replace(/[.。…]+$/, ''))}</div>
         <div class="prompt-opts"><button type="button" class="btn primary" data-ans="">继续</button></div>
-        <p class="hint muted">上面的日志是这一步的输出, 看完后点继续。</p></form>`;
+        <p class="hint muted">这一步的输出在下方"详细日志"里, 看完后点继续。</p></form>`;
     } else box.innerHTML = `<form class="card prompt" novalidate>
       <div class="prompt-q">${esc(text)}</div>
       ${p.confirm ? `<div class="prompt-opts">

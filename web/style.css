@@ -207,7 +207,18 @@ td.wrap { white-space: normal; word-break: break-all; max-width: 320px; }
 .prompt-input { display: flex; gap: 8px; }
 .prompt-input input { flex: 1; min-width: 0; }
 .prompt .hint { margin: 0; }
-.task-log { max-height: 55vh; min-height: 200px; }
+.task-log { max-height: 55vh; min-height: 120px; margin-top: 10px; }
+.task-progress { margin-bottom: 16px; display: grid; gap: 12px; }
+.task-progress[hidden], .task-details[hidden] { display: none; }
+.pbar { height: 10px; background: var(--code); border-radius: 5px; overflow: hidden; }
+.pbar > i { display: block; width: 0; height: 100%; background: var(--accent); border-radius: 5px; transition: width .6s ease; }
+.pbar.live > i { background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / .35), transparent); background-size: 200% 100%; animation: pbar-shine 1.4s linear infinite; }
+.pbar.ok > i { background: var(--ok); }
+.pbar.bad > i { background: var(--bad); }
+@keyframes pbar-shine { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .pbar.live > i { animation: none; } }
+.task-now { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-details summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
 
 /* 日志 */
 pre.log {

@@ -241,7 +241,7 @@ const WRITES = {
 
 // ─── 交互式任务: 在后台运行原脚本的菜单流程, 把 read 提示转成网页上的问题 ───────────
 
-const INSTALL_PROTOS = ['vless', 'vless-xhttp', 'vless-vision', 'trojan', 'hy2',
+const INSTALL_PROTOS = ['vless', 'vless-xhttp', 'vless-vision', 'hy2',
   'ss2022', 'ss-legacy', 'socks', 'snell', 'snell-v5', 'anytls', 'tuic', 'naive', 'vless-enc'];
 const TASK_KINDS = {
   install: (b) => { need(INSTALL_PROTOS.includes(b.protocol), '不支持的协议'); return [b.protocol]; },

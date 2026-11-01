@@ -7450,7 +7450,7 @@ _install_binary() {
     url="${url//\$\{aarch\}/$aarch}"
 
     # 下载并验证
-    if ! curl -fsSL --connect-timeout 60 --retry 2 -o "$tmp/pkg" "$url"; then
+    if ! curl -fsSL --connect-timeout 30 --speed-limit 10240 --speed-time 30 --retry 3 -o "$tmp/pkg" "$url"; then
         rm -rf "$tmp"
         _err "下载 $name 失败: $url"
         return 1
@@ -9301,7 +9301,7 @@ install_naive() {
     fi
     
     _info "下载: $download_url"
-    if ! curl -fSLo "$tmp/caddy.tar.xz" --connect-timeout 60 --retry 3 --progress-bar "$download_url"; then
+    if ! curl -fSLo "$tmp/caddy.tar.xz" --connect-timeout 30 --speed-limit 10240 --speed-time 30 --retry 3 --progress-bar "$download_url"; then
         _err "下载失败"
         rm -rf "$tmp"
         return 1
@@ -25413,7 +25413,7 @@ api_sub_disable() {
 #─── 交互式任务 (通过 webtty 在面板里运行原菜单流程) ──────────────────────────
 
 # 面板可以运行的交互流程白名单
-readonly API_RUN_INSTALL_PROTOCOLS="vless vless-xhttp vless-vision trojan hy2 ss2022 ss-legacy socks snell snell-v5 anytls tuic naive vless-enc"
+readonly API_RUN_INSTALL_PROTOCOLS="vless vless-xhttp vless-vision hy2 ss2022 ss-legacy socks snell snell-v5 anytls tuic naive vless-enc"
 
 # api_run <任务> [参数]   输出为纯文本日志 + webtty 事件, 退出码表示成败
 api_run() {
