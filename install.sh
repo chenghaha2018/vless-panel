@@ -29,6 +29,11 @@ WEBROOT=/var/www/html
 SHORTCUT=/usr/local/bin/vp
 
 DOMAIN="" HTTPS_PORT="" PANEL_PORT_WANT="" EMAIL="" ACTION="" PURGE=false ASK_DOMAIN=yes
+# 旧版安装脚本下载完新版后, 把已经问好的选项交给新版脚本继续 (见 do_install)
+if [[ -n "${VP_HANDOFF:-}" ]]; then
+    DOMAIN="${VP_DOMAIN:-}" HTTPS_PORT="${VP_HTTPS_PORT:-}" PANEL_PORT_WANT="${VP_PANEL_PORT:-}" EMAIL="${VP_EMAIL:-}"
+    ACTION=install ASK_DOMAIN=no
+fi
 
 R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' C=$'\e[36m' B=$'\e[1m' D=$'\e[2m' N=$'\e[0m'
 info() { echo -e "${C}▸${N} $*"; }
@@ -72,7 +77,7 @@ DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')
 [[ -z "$DOMAIN" || "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "域名格式不正确: $DOMAIN"
 [[ -z "$HTTPS_PORT" || ( "$HTTPS_PORT" =~ ^[0-9]+$ && "$HTTPS_PORT" -ge 1 && "$HTTPS_PORT" -le 65535 ) ]] || die "端口不正确: $HTTPS_PORT"
 
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d); trap 'rm -rf "$tmp" ${VP_HANDOFF_TMP:+"$VP_HANDOFF_TMP"}' EXIT
 
 #─── 通用工具 ───────────────────────────────────────────────────────────────────
 
@@ -460,6 +465,14 @@ do_install() {
     fi
     [[ -f "$src/server/server.js" && -f "$src/engine/vless.sh" && -d "$src/server/node_modules" ]] || die "安装包不完整"
 
+    # 用 vp 升级时, 正在运行的是旧版安装脚本, 它不知道新版本增加的步骤;
+    # 安装脚本有变化就交给新下载的脚本继续 (已经问好的选项一并传过去)
+    if [[ -z "${VP_HANDOFF:-}" && -z "$LOCAL_SRC" ]] && ! cmp -s "$src/install.sh" "${BASH_SOURCE[0]}" 2>/dev/null; then
+        info "使用新版安装脚本继续..."
+        trap - EXIT
+        exec env VP_HANDOFF=1 VP_HANDOFF_TMP="$tmp" VLESS_PANEL_SRC="$src"             VP_DOMAIN="$DOMAIN" VP_HTTPS_PORT="$HTTPS_PORT" VP_PANEL_PORT="$PANEL_PORT_WANT" VP_EMAIL="$EMAIL"             bash "$src/install.sh"
+    fi
+
     rm -rf "$DIR.new"
     cp -a "$src" "$DIR.new"
     rm -rf "$DIR.new/server/data" "$DIR.new/.git"
@@ -518,6 +531,10 @@ interactive_install() {
         load_state
         echo
         info "面板已安装$([[ -n "$PANEL_DOMAIN" ]] && echo ", 已绑定 $PANEL_DOMAIN")。将从 GitHub 升级到最新版, 配置和密码保持不变。"
+        if pgrep -f "vless.sh --api run" >/dev/null 2>&1; then
+            warn "面板里有任务正在运行 (比如装协议), 升级会重启面板并中断它"
+            confirm "  仍然升级?" n || { echo "  已取消"; return 0; }
+        fi
         confirm "  确认升级?" y || { echo "  已取消"; return 0; }
         do_install
         return 0
