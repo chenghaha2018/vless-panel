@@ -135,10 +135,20 @@ dns_points_here() {
 }
 
 load_state() {
-    PANEL_DOMAIN="" PANEL_HTTPS_PORT=""
+    PANEL_DOMAIN="" PANEL_HTTPS_PORT="" PANEL_WEB=""
     [[ -f "$STATE" ]] && . "$STATE"
     return 0
 }
+
+CADDYFILE=/etc/caddy/Caddyfile
+# 本机是否已由 Caddy 占用 80/443 (这种机器上由 Caddy 反代面板、自动申请证书, 不另装 nginx)
+caddy_owns_web() {
+    systemctl is-active --quiet caddy 2>/dev/null && [[ -f "$CADDYFILE" ]] \
+        && ss -tlnp 2>/dev/null | grep -E '[:.](80|443)[[:space:]]' | grep -q caddy
+}
+
+# 访问地址里的端口: 443 不写
+url_port() { [[ "$1" == 443 ]] && echo "" || echo ":$1"; }
 
 #─── 交互: 域名 / 端口 ──────────────────────────────────────────────────────────
 
@@ -208,6 +218,7 @@ do_uninstall() {
     fi
     rm -rf "$DIR"
     [[ -f "$SHORTCUT" ]] && grep -q "$DIR/install.sh" "$SHORTCUT" 2>/dev/null && rm -f "$SHORTCUT"
+    caddy_remove_block && ok "已删除 Caddy 里的面板站点"
     if [[ -f "$NGINX_CONF" ]]; then
         rm -f "$NGINX_CONF"
         nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
@@ -226,11 +237,77 @@ do_uninstall() {
 
 #─── HTTPS ──────────────────────────────────────────────────────────────────────
 
+CADDY_BEGIN="# >>> vless-panel (由 vless-panel install.sh 管理, 卸载面板时自动删除)"
+CADDY_END="# <<< vless-panel"
+
+# 从 Caddyfile 删除面板站点段; 有改动并重载成功返回 0
+caddy_remove_block() {
+    [[ -f "$CADDYFILE" ]] && grep -qF "$CADDY_BEGIN" "$CADDYFILE" || return 1
+    cp -a "$CADDYFILE" "$CADDYFILE.bak.$(date +%s)"
+    sed -i "\|^$CADDY_BEGIN|,\|^$CADDY_END|d" "$CADDYFILE"
+    systemctl reload caddy 2>/dev/null || true
+    return 0
+}
+
+# Caddy 模式: 在 Caddyfile 末尾加一个带标记的站点段, 证书由 Caddy 自动申请和续期
+setup_caddy() {
+    local panel_port="$1" bak code
+    bak="$CADDYFILE.bak.$(date +%s)"
+    cp -a "$CADDYFILE" "$bak"
+    restore() { cp -a "$bak" "$CADDYFILE"; systemctl reload caddy 2>/dev/null || true; }
+
+    sed -i "\|^$CADDY_BEGIN|,\|^$CADDY_END|d" "$CADDYFILE"     # 换域名: 先去掉旧段
+    if grep -qE "^[^#]*(^|[[:space:],])$DOMAIN([[:space:],{]|$)" "$CADDYFILE"; then
+        restore
+        die "Caddyfile 里已经有 $DOMAIN 的站点, 请换一个域名或先删除原配置"
+    fi
+    cat >> "$CADDYFILE" <<EOF
+
+$CADDY_BEGIN
+$DOMAIN {
+	reverse_proxy 127.0.0.1:$panel_port {
+		header_up X-Real-IP {remote_host}
+	}
+	header Strict-Transport-Security "max-age=31536000"
+}
+$CADDY_END
+EOF
+    if ! caddy validate --config "$CADDYFILE" --adapter caddyfile >"$tmp/caddy.log" 2>&1; then
+        tail -n 5 "$tmp/caddy.log" >&2
+        restore
+        die "Caddy 配置检查失败, 已恢复原配置 (备份: $bak)"
+    fi
+    systemctl reload caddy || { restore; die "Caddy 重载失败, 已恢复原配置"; }
+    ok "已加入 Caddy 站点 (原配置备份: $bak)"
+
+    jq '.secureCookie = true | .trustProxy = true' "$DATA/panel.json" > "$tmp/pc" && cat "$tmp/pc" > "$DATA/panel.json"
+    systemctl restart vless-panel
+    HTTPS_PORT=443
+    printf 'PANEL_DOMAIN=%s\nPANEL_HTTPS_PORT=443\nPANEL_WEB=caddy\n' "$DOMAIN" > "$STATE"
+
+    # Caddy 在重载后自动申请证书, 一般十几秒
+    info "等待 Caddy 申请证书..."
+    for _ in $(seq 1 30); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/" 2>/dev/null || true)
+        [[ "$code" =~ ^[2-4][0-9][0-9]$ ]] && { ok "证书已就绪, HTTPS 可用 (Caddy 会自动续期)"; return 0; }
+        sleep 2
+    done
+    warn "暂时还没拿到证书, Caddy 会在后台继续申请; 请确认云服务商放行了 80 和 443 端口"
+}
+
 setup_https() {
     local panel_port; panel_port=$(jq -r .port "$DATA/panel.json")
     if ! dns_points_here "$DOMAIN"; then
         die "域名 $DOMAIN 解析到 $(resolve_v4 "$DOMAIN" | paste -sd, - | sed 's/^$/无/'), 不是本机 $(public_ip)。请先把域名 A 记录指向本机 (如用 Cloudflare 请关闭小云朵)"
     fi
+    if caddy_owns_web; then
+        info "检测到本机由 Caddy 提供网站 (占用 80/443), 改由 Caddy 反代面板"
+        [[ -f "$NGINX_CONF" ]] && { rm -f "$NGINX_CONF"; nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true; }
+        setup_caddy "$panel_port"
+        return 0
+    fi
+    # 之前是 Caddy 模式, 现在不是了: 清掉旧的 Caddy 段
+    caddy_remove_block || true
 
     if ! command -v nginx >/dev/null; then
         info "安装 nginx..."
@@ -331,7 +408,7 @@ EOF
     if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         ufw allow "$HTTPS_PORT/tcp" >/dev/null && ufw allow 80/tcp >/dev/null && ok "已在 ufw 放行 80 和 $HTTPS_PORT 端口"
     fi
-    printf 'PANEL_DOMAIN=%s\nPANEL_HTTPS_PORT=%s\n' "$DOMAIN" "$HTTPS_PORT" > "$STATE"
+    printf 'PANEL_DOMAIN=%s\nPANEL_HTTPS_PORT=%s\nPANEL_WEB=nginx\n' "$DOMAIN" "$HTTPS_PORT" > "$STATE"
     ok "HTTPS 已配置"
 }
 
@@ -434,7 +511,10 @@ interactive_install() {
     ask_domain
     echo
     echo "${B}② 确认端口${N}"
-    if [[ -n "$DOMAIN" ]]; then
+    if [[ -n "$DOMAIN" ]] && caddy_owns_web; then
+        HTTPS_PORT=443
+        echo "  本机已由 Caddy 占用 80/443, 面板将由 Caddy 反代在 443 提供 HTTPS, 证书由 Caddy 自动申请"
+    elif [[ -n "$DOMAIN" ]]; then
         ask_port "面板 HTTPS 端口 (443 留给代理协议)" HTTPS_PORT "$HTTPS_PORT"
     else
         ask_port "面板端口 (只监听本机, SSH 隧道用)" PANEL_PORT_WANT
@@ -443,7 +523,7 @@ interactive_install() {
     echo
     echo "${B}③ 确认安装${N}"
     if [[ -n "$DOMAIN" ]]; then
-        echo "  访问方式: ${G}https://$DOMAIN:$HTTPS_PORT${N} (自动申请证书)"
+        echo "  访问方式: ${G}https://$DOMAIN$(url_port "$HTTPS_PORT")${N} (自动申请证书)"
     else
         echo "  访问方式: SSH 隧道, 面板端口 ${G}$PANEL_PORT_WANT${N}"
     fi
@@ -472,8 +552,13 @@ interactive_bind_domain() {
     [[ -z "$DOMAIN" ]] && { echo "  未做改动"; return 0; }
     echo
     echo "${B}② 确认端口${N}"
-    ask_port "面板 HTTPS 端口" HTTPS_PORT "$PANEL_HTTPS_PORT"
-    confirm "  确认绑定 $DOMAIN:$HTTPS_PORT ?" y || { echo "  已取消"; return 0; }
+    if caddy_owns_web; then
+        HTTPS_PORT=443
+        echo "  本机已由 Caddy 占用 80/443, 面板将由 Caddy 反代在 443 提供 HTTPS, 证书由 Caddy 自动申请"
+    else
+        ask_port "面板 HTTPS 端口" HTTPS_PORT "$PANEL_HTTPS_PORT"
+    fi
+    confirm "  确认绑定 https://$DOMAIN$(url_port "$HTTPS_PORT") ?" y || { echo "  已取消"; return 0; }
     command -v jq >/dev/null || install_deps
     setup_https
     show_info "域名绑定完成" false
@@ -502,7 +587,7 @@ show_info() {
     echo "${B}════════════════════════════════════════════════════${N}"
     echo "  状态:     $(systemctl is-active vless-panel 2>/dev/null | sed "s/^active$/${G}运行中${N}/")"
     if [[ -n "$PANEL_DOMAIN" ]]; then
-        echo "  访问地址: ${G}https://$PANEL_DOMAIN:$PANEL_HTTPS_PORT$base_path${N}"
+        echo "  访问地址: ${G}https://$PANEL_DOMAIN$(url_port "$PANEL_HTTPS_PORT")$base_path${N}"
         echo "  ${Y}云服务器请在安全组 / 防火墙放行 TCP 80 和 $PANEL_HTTPS_PORT${N}"
     else
         echo "  面板只监听本机, 在你自己电脑上开 SSH 隧道后访问:"

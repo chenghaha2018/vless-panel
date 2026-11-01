@@ -64,6 +64,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/chenghaha2018/vless-panel/ma
 - **装好后在服务器上输入 `vp` 就能随时打开这个菜单**
 - 不绑定域名时，面板只监听本机，用 SSH 隧道访问：`ssh -L 端口:127.0.0.1:端口 root@服务器`，然后打开 `http://127.0.0.1:端口/随机路径/`
 - 绑定域名前：把域名 A 记录指向本机（Cloudflare 要关掉小云朵），并在云服务商安全组放行 TCP 80 和面板 HTTPS 端口。绑定后自动安装 nginx 和 acme.sh、申请 Let's Encrypt 证书（自动续期），面板走单独的 HTTPS 端口，443 留给代理协议
+- **本机已有 Caddy 占用 80/443 时**（比如已经用 Caddy 跑了别的网站），会自动改用 Caddy：在 `/etc/caddy/Caddyfile` 末尾加一个带标记的站点段反代面板，证书由 Caddy 自动申请和续期，地址是 `https://域名/路径/`（443）。修改前自动备份，`caddy validate` 不通过会自动恢复；卸载面板时只删除这一段
 - 升级保留配置、密码和域名；卸载不影响已安装的代理协议，可选择是否同时删除配置和证书
 - 新服务器不需要先装原来的 `vless` 脚本，协议、证书、订阅都可以在面板里安装
 
